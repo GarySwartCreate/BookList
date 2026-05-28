@@ -1,0 +1,55 @@
+/* BookList – global styles */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: #0f1117;
+  color: #f1f0ff;
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.55;
+}
+
+/* Focus rings */
+:focus-visible {
+  outline: 2px solid #7c6ff7;
+  outline-offset: 2px;
+}
+
+/* Hide scrollbars on horizontal scroll rows */
+div::-webkit-scrollbar { display: none; }
+div { scrollbar-width: none; -ms-overflow-style: none; }
+
+/* Vertical scrollbar for modals/textareas */
+textarea::-webkit-scrollbar { width: 4px; }
+textarea::-webkit-scrollbar-track { background: #242840; }
+textarea::-webkit-scrollbar-thumb { background: #4f47c4; border-radius: 2px; }
+
+/* Remove default button styles */
+button { line-height: 1; outline: none; }
+button:focus-visible { outline: 2px solid #7c6ff7; outline-offset: 2px; }
+
+/* Image rendering */
+img { display: block; max-width: 100%; }
+
+/* Form elements */
+select, textarea, input {
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  color: #f1f0ff;
+}
+
+/* Remove autofill yellow */
+input:-webkit-autofill {
+  -webkit-box-shadow: 0 0 0 30px #242840 inset !important;
+  -webkit-text-fill-color: #f1f0ff !important;
+}

@@ -1,0 +1,1589 @@
+// ================================================================
+// BookList – App.jsx
+// Stack: React + Vite + Supabase + Vercel  (single-file)
+// Dark cinematic theme · Poster grid · Horizontal scroll rows
+// ================================================================
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { createClient } from '@supabase/supabase-js'
+
+// ─── Supabase client ─────────────────────────────────────────────
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+)
+const GOOGLE_BOOKS_KEY = import.meta.env.VITE_GOOGLE_BOOKS_API_KEY || ''
+
+// ─── Design tokens ───────────────────────────────────────────────
+const C = {
+  bg:         '#0f1117',
+  surface:    '#1a1d2e',
+  surface2:   '#242840',
+  border:     '#2d3158',
+  text:       '#f1f0ff',
+  muted:      '#8b87b0',
+  primary:    '#7c6ff7',
+  primaryDim: '#4f47c4',
+  accent:     '#f0b429',
+  success:    '#34d399',
+  star:       '#f0b429',
+  danger:     '#f87171',
+  nav:        '#0a0c18',
+  overlay:    'rgba(0,0,0,0.85)',
+  white:      '#ffffff',
+}
+
+const f = {
+  serif: 'Georgia, "Times New Roman", serif',
+  sans:  '"Helvetica Neue", Arial, sans-serif',
+}
+
+const btn = (variant = 'primary', size = 'md') => {
+  const sizes = { sm: { fontSize: 12, padding: '5px 12px' }, md: { fontSize: 14, padding: '8px 16px' }, lg: { fontSize: 16, padding: '12px 22px' } }
+  const variants = {
+    primary: { background: C.primary,   color: C.white,  border: 'none' },
+    ghost:   { background: 'transparent', color: C.primary, border: `1px solid ${C.primary}` },
+    subtle:  { background: C.surface2,  color: C.text,   border: `1px solid ${C.border}` },
+    danger:  { background: 'transparent', color: C.danger, border: `1px solid ${C.danger}` },
+    accent:  { background: C.accent,    color: '#0f1117', border: 'none' },
+  }
+  return {
+    cursor: 'pointer', fontFamily: f.sans, borderRadius: 6, fontWeight: 600,
+    display: 'inline-flex', alignItems: 'center', gap: 4, transition: 'opacity 0.15s',
+    ...sizes[size], ...variants[variant],
+  }
+}
+
+const pill = (active) => ({
+  cursor: 'pointer', fontFamily: f.sans, fontSize: 13, fontWeight: 600,
+  padding: '6px 14px', borderRadius: 20, border: 'none', transition: 'all 0.15s',
+  background: active ? C.primary : C.surface2,
+  color: active ? C.white : C.muted,
+})
+
+const inputStyle = {
+  width: '100%', padding: '10px 14px', borderRadius: 8,
+  border: `1px solid ${C.border}`, background: C.surface2,
+  color: C.text, fontFamily: f.sans, fontSize: 14, outline: 'none',
+  boxSizing: 'border-box',
+}
+
+// ─── Google Books API ─────────────────────────────────────────────
+async function searchGoogleBooks(query, maxResults = 20) {
+  const url = new URL('https://www.googleapis.com/books/v1/volumes')
+  url.searchParams.set('q', query)
+  url.searchParams.set('maxResults', String(maxResults))
+  url.searchParams.set('printType', 'books')
+  if (GOOGLE_BOOKS_KEY) url.searchParams.set('key', GOOGLE_BOOKS_KEY)
+  const res = await fetch(url.toString())
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err?.error?.message || `Google Books error ${res.status}`)
+  }
+  const data = await res.json()
+  return (data.items || []).map(parseVolume)
+}
+
+// ─── Open Library fallback ────────────────────────────────────────
+async function searchOpenLibrary(query, maxResults = 20) {
+  const url = new URL('https://openlibrary.org/search.json')
+  url.searchParams.set('q', query)
+  url.searchParams.set('limit', String(maxResults))
+  url.searchParams.set('fields', 'key,title,author_name,cover_i,subject,first_publish_year,number_of_pages_median,isbn')
+  const res = await fetch(url.toString())
+  if (!res.ok) throw new Error(`Open Library error ${res.status}`)
+  const data = await res.json()
+  return (data.docs || []).map(doc => ({
+    id:             `ol_${doc.key?.replace('/works/', '') || Math.random()}`,
+    title:          doc.title || 'Unknown Title',
+    authors:        doc.author_name || [],
+    description:    '',
+    cover_url:      doc.cover_i
+      ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`
+      : null,
+    categories:     (doc.subject || []).slice(0, 3),
+    published_date: doc.first_publish_year ? String(doc.first_publish_year) : '',
+    page_count:     doc.number_of_pages_median || null,
+    isbn:           doc.isbn?.[0] || null,
+  }))
+}
+
+// Try Google Books first, fall back to Open Library on failure
+async function searchBooks(query, maxResults = 20) {
+  try {
+    const results = await searchGoogleBooks(query, maxResults)
+    if (results.length > 0) return { results, source: 'google' }
+    // Google returned empty — try Open Library
+    const olResults = await searchOpenLibrary(query, maxResults)
+    return { results: olResults, source: 'openlibrary' }
+  } catch (googleErr) {
+    console.warn('Google Books failed, trying Open Library:', googleErr.message)
+    try {
+      const olResults = await searchOpenLibrary(query, maxResults)
+      return { results: olResults, source: 'openlibrary' }
+    } catch (olErr) {
+      throw new Error('Both search providers failed. Check your connection.')
+    }
+  }
+}
+
+function parseVolume(item) {
+  const v = item.volumeInfo || {}
+  const cover = v.imageLinks?.thumbnail || v.imageLinks?.smallThumbnail || null
+  return {
+    id:             item.id,
+    title:          v.title || 'Unknown Title',
+    authors:        v.authors || [],
+    description:    v.description || '',
+    cover_url:      cover ? cover.replace(/^http:/, 'https:') : null,
+    categories:     v.categories || [],
+    published_date: v.publishedDate || '',
+    page_count:     v.pageCount || null,
+    isbn:           v.industryIdentifiers?.find(i => i.type === 'ISBN_13')?.identifier || null,
+  }
+}
+
+async function upsertBook(book) {
+  const { error } = await supabase.from('books').upsert({
+    id: book.id, title: book.title, authors: book.authors,
+    description: book.description, cover_url: book.cover_url,
+    categories: book.categories, published_date: book.published_date,
+    page_count: book.page_count, isbn: book.isbn,
+  }, { onConflict: 'id' })
+  if (error) console.error('upsertBook:', error)
+}
+
+async function addToLibrary(userId, book, status) {
+  await upsertBook(book)
+  const { error } = await supabase.from('user_books').upsert({
+    user_id: userId, book_id: book.id, status, position: 0,
+  }, { onConflict: 'user_id,book_id' })
+  if (error) throw error
+}
+
+// ─── Constants ────────────────────────────────────────────────────
+const STATUS_LABELS = { reading: 'Reading', read: 'Read', want_to_read: 'Want to Read' }
+const STATUS_ICONS  = { reading: '📖', read: '✅', want_to_read: '🔖' }
+const STATUS_COLORS = {
+  reading:      { bg: '#1a3a2a', color: '#34d399' },
+  read:         { bg: '#2a1f3d', color: '#a78bfa' },
+  want_to_read: { bg: '#2a1a0a', color: '#f0b429' },
+}
+
+function timeAgo(dateStr) {
+  const diff = (Date.now() - new Date(dateStr)) / 1000
+  if (diff < 60)   return 'just now'
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`
+  if (diff < 604800) return `${Math.floor(diff/86400)}d ago`
+  return new Date(dateStr).toLocaleDateString()
+}
+
+// ================================================================
+// Small shared components
+// ================================================================
+
+function StatusBadge({ status, size = 'sm' }) {
+  const sc = STATUS_COLORS[status] || {}
+  return (
+    <span style={{
+      fontSize: size === 'sm' ? 10 : 12, padding: size === 'sm' ? '2px 7px' : '3px 10px',
+      borderRadius: 20, fontFamily: f.sans, fontWeight: 700, letterSpacing: '0.03em', ...sc,
+    }}>
+      {STATUS_ICONS[status]} {STATUS_LABELS[status] || status}
+    </span>
+  )
+}
+
+function StarRating({ value, onChange, readonly = false, size = 16 }) {
+  const [hover, setHover] = useState(0)
+  return (
+    <span style={{ display: 'inline-flex', gap: 2 }}>
+      {[1,2,3,4,5].map(n => (
+        <span key={n}
+          onClick={() => !readonly && onChange?.(n === value ? null : n)}
+          onMouseEnter={() => !readonly && setHover(n)}
+          onMouseLeave={() => !readonly && setHover(0)}
+          style={{
+            fontSize: size, lineHeight: 1, userSelect: 'none',
+            cursor: readonly ? 'default' : 'pointer',
+            color: n <= (hover || value || 0) ? C.star : C.border,
+            transition: 'color 0.1s',
+          }}>★</span>
+      ))}
+    </span>
+  )
+}
+
+function NoCover({ title, width = 120, height = 180 }) {
+  return (
+    <div style={{
+      width, height, borderRadius: 8, flexShrink: 0,
+      background: `linear-gradient(135deg, ${C.surface2} 0%, ${C.primaryDim} 100%)`,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: Math.round(height * 0.25), color: C.muted, userSelect: 'none',
+    }}>📖</div>
+  )
+}
+
+function Spinner({ text = 'Loading…' }) {
+  return (
+    <p style={{ color: C.muted, fontFamily: f.sans, textAlign: 'center', padding: '32px 0', fontSize: 14 }}>
+      {text}
+    </p>
+  )
+}
+
+function EmptyState({ icon = '📚', message, sub }) {
+  return (
+    <div style={{ textAlign: 'center', padding: '56px 24px', color: C.muted }}>
+      <div style={{ fontSize: 52, marginBottom: 14 }}>{icon}</div>
+      <p style={{ margin: '0 0 6px', fontSize: 16, fontFamily: f.serif, color: C.text }}>{message}</p>
+      {sub && <p style={{ margin: 0, fontSize: 13, fontFamily: f.sans }}>{sub}</p>}
+    </div>
+  )
+}
+
+// ================================================================
+// PosterCard – book cover tile used everywhere
+// ================================================================
+function PosterCard({ book, userBook, onClick, width = 120, height = 180 }) {
+  const [hovered, setHovered] = useState(false)
+  const cover = book?.cover_url || userBook?.books?.cover_url || null
+  const title = book?.title || userBook?.books?.title || ''
+  const authors = book?.authors || userBook?.books?.authors || []
+  const rating = userBook?.rating
+  const status = userBook?.status
+
+  return (
+    <div
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        width, flexShrink: 0, position: 'relative', cursor: 'pointer', borderRadius: 8,
+        transform: hovered ? 'scale(1.04)' : 'scale(1)',
+        transition: 'transform 0.18s ease',
+        boxShadow: hovered ? '0 8px 32px rgba(0,0,0,0.5)' : '0 2px 10px rgba(0,0,0,0.3)',
+      }}
+    >
+      {cover
+        ? <img src={cover} alt={title}
+            style={{ width, height, objectFit: 'cover', borderRadius: 8, display: 'block' }} />
+        : <NoCover title={title} width={width} height={height} />
+      }
+
+      {/* Rating badge */}
+      {rating && (
+        <div style={{
+          position: 'absolute', top: 6, right: 6,
+          background: 'rgba(0,0,0,0.8)', borderRadius: 5,
+          padding: '2px 6px', fontSize: 11, fontFamily: f.sans,
+          fontWeight: 700, color: C.accent, display: 'flex', alignItems: 'center', gap: 2,
+        }}>★ {rating}</div>
+      )}
+
+      {/* Status corner dot */}
+      {status && (
+        <div style={{
+          position: 'absolute', top: 6, left: 6, width: 8, height: 8, borderRadius: '50%',
+          background: STATUS_COLORS[status]?.color || C.muted,
+          boxShadow: '0 0 4px rgba(0,0,0,0.6)',
+        }} />
+      )}
+
+      {/* Title overlay */}
+      <div style={{
+        position: 'absolute', bottom: 0, left: 0, right: 0, borderRadius: '0 0 8px 8px',
+        background: 'linear-gradient(transparent, rgba(10,8,24,0.95))',
+        padding: '28px 8px 8px',
+        opacity: hovered ? 1 : 0.85,
+        transition: 'opacity 0.18s',
+      }}>
+        <p style={{
+          margin: '0 0 2px', fontSize: 11, fontWeight: 700, color: C.white,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          fontFamily: f.sans,
+        }}>{title}</p>
+        <p style={{
+          margin: 0, fontSize: 10, color: 'rgba(255,255,255,0.6)', fontFamily: f.sans,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>{authors.slice(0,1).join(', ')}</p>
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
+// HorizontalRow – scrollable shelf row
+// ================================================================
+function HorizontalRow({ title, items, renderItem, emptyMsg, loading, seeAllAction }) {
+  return (
+    <div style={{ marginBottom: 36 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+        <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontWeight: 700, fontFamily: f.sans }}>
+          {title}
+        </h2>
+        {seeAllAction && items.length > 0 && (
+          <button onClick={seeAllAction} style={{ ...btn('ghost', 'sm'), fontSize: 12 }}>
+            See All →
+          </button>
+        )}
+      </div>
+      {loading ? <Spinner /> : items.length === 0
+        ? <p style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, fontStyle: 'italic', margin: 0 }}>
+            {emptyMsg}
+          </p>
+        : (
+          <div style={{
+            display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 8,
+            scrollbarWidth: 'none', msOverflowStyle: 'none',
+          }}>
+            {items.map(renderItem)}
+          </div>
+        )
+      }
+    </div>
+  )
+}
+
+// ================================================================
+// BookDetailModal – full info overlay
+// ================================================================
+function BookDetailModal({ item, userId, onClose, onUpdate }) {
+  // item can be a userBook (from library) or a raw book (from search/recs)
+  const isLibraryBook = !!item?.user_id
+  const book = isLibraryBook ? (item.books || {}) : item
+  const userBook = isLibraryBook ? item : null
+
+  const [status,  setStatus]  = useState(userBook?.status || '')
+  const [rating,  setRating]  = useState(userBook?.rating || null)
+  const [notes,   setNotes]   = useState(userBook?.notes || '')
+  const [saving,  setSaving]  = useState(false)
+  const [adding,  setAdding]  = useState(null) // status key being added
+  const [msg,     setMsg]     = useState(null)
+
+  // Close on backdrop click or Escape
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  async function handleAddToLibrary(st) {
+    setAdding(st)
+    try {
+      await addToLibrary(userId, book, st)
+      setMsg({ type: 'success', text: `Added to ${STATUS_LABELS[st]}!` })
+      onUpdate?.()
+      setTimeout(onClose, 900)
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message })
+    }
+    setAdding(null)
+  }
+
+  async function handleSave() {
+    if (!userBook) return
+    setSaving(true)
+    await supabase.from('user_books')
+      .update({ status, rating, notes, updated_at: new Date().toISOString() })
+      .eq('id', userBook.id)
+    onUpdate?.()
+    setSaving(false)
+    setMsg({ type: 'success', text: 'Saved!' })
+    setTimeout(() => setMsg(null), 2000)
+  }
+
+  async function handleRemove() {
+    if (!userBook) return
+    if (!confirm('Remove from your library?')) return
+    await supabase.from('user_books').delete().eq('id', userBook.id)
+    onUpdate?.()
+    onClose()
+  }
+
+  const statusChanged = status !== userBook?.status
+  const ratingChanged = rating !== userBook?.rating
+  const notesChanged  = notes  !== (userBook?.notes || '')
+  const isDirty = statusChanged || ratingChanged || notesChanged
+
+  return (
+    <div
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        background: 'rgba(5,4,15,0.92)', backdropFilter: 'blur(6px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 20,
+      }}
+    >
+      <div style={{
+        background: C.surface, borderRadius: 14, padding: 28,
+        maxWidth: 640, width: '100%', maxHeight: '88vh', overflowY: 'auto',
+        border: `1px solid ${C.border}`,
+        boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
+        position: 'relative',
+      }}>
+        {/* Close button */}
+        <button onClick={onClose} style={{
+          position: 'absolute', top: 14, right: 14,
+          background: C.surface2, border: 'none', color: C.muted,
+          borderRadius: '50%', width: 30, height: 30, cursor: 'pointer',
+          fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>×</button>
+
+        <div style={{ display: 'flex', gap: 20, marginBottom: 22 }}>
+          {/* Cover */}
+          <div style={{ flexShrink: 0 }}>
+            {book.cover_url
+              ? <img src={book.cover_url} alt={book.title}
+                  style={{ width: 110, height: 165, objectFit: 'cover', borderRadius: 8,
+                    boxShadow: '0 4px 20px rgba(0,0,0,0.4)' }} />
+              : <NoCover title={book.title} width={110} height={165} />
+            }
+          </div>
+
+          {/* Info */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h2 style={{ margin: '0 0 6px', color: C.text, fontSize: 20, fontFamily: f.serif,
+              fontWeight: 700, lineHeight: 1.2 }}>
+              {book.title}
+            </h2>
+            <p style={{ margin: '0 0 6px', color: C.muted, fontFamily: f.sans, fontSize: 14 }}>
+              {book.authors?.join(', ')}
+              {book.published_date && ` · ${book.published_date.slice(0,4)}`}
+            </p>
+            {book.categories?.length > 0 && (
+              <p style={{ margin: '0 0 10px', fontSize: 12, color: C.primary, fontFamily: f.sans }}>
+                {book.categories.slice(0,3).join(' · ')}
+              </p>
+            )}
+            {book.page_count && (
+              <p style={{ margin: '0 0 10px', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
+                {book.page_count} pages
+              </p>
+            )}
+            {book.description && (
+              <p style={{
+                margin: 0, fontSize: 13, color: C.muted, fontFamily: f.sans, lineHeight: 1.5,
+                display: '-webkit-box', WebkitLineClamp: 4,
+                WebkitBoxOrient: 'vertical', overflow: 'hidden',
+              }}>{book.description}</p>
+            )}
+          </div>
+        </div>
+
+        {/* In library: status / rating / notes */}
+        {isLibraryBook && (
+          <>
+            <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 18, marginBottom: 16 }}>
+              <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+                textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Status</p>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {Object.entries(STATUS_LABELS).map(([key, lbl]) => (
+                  <button key={key} onClick={() => setStatus(key)}
+                    style={{ ...pill(status === key), fontSize: 12 }}>
+                    {STATUS_ICONS[key]} {lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+                textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>My Rating</p>
+              <StarRating value={rating} onChange={setRating} size={24} />
+            </div>
+
+            <div style={{ marginBottom: 20 }}>
+              <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+                textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Notes</p>
+              <textarea value={notes} onChange={e => setNotes(e.target.value)}
+                placeholder="Your thoughts, quotes, reflections…"
+                style={{ ...inputStyle, height: 80, resize: 'vertical', fontSize: 13 }} />
+            </div>
+
+            {msg && (
+              <p style={{ margin: '0 0 12px', fontSize: 13, fontFamily: f.sans,
+                color: msg.type === 'success' ? C.success : C.danger }}>{msg.text}</p>
+            )}
+
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <button onClick={handleSave} disabled={!isDirty || saving}
+                style={{ ...btn('primary'), opacity: (!isDirty || saving) ? 0.5 : 1 }}>
+                {saving ? 'Saving…' : '✓ Save Changes'}
+              </button>
+              <button onClick={handleRemove} style={btn('danger', 'sm')}>
+                Remove
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* Not in library: add buttons */}
+        {!isLibraryBook && (
+          <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 18 }}>
+            {msg
+              ? <p style={{ margin: 0, fontSize: 14, fontFamily: f.sans, color: C.success }}>{msg.text}</p>
+              : (
+                <div>
+                  <p style={{ margin: '0 0 10px', fontSize: 13, color: C.muted, fontFamily: f.sans }}>
+                    Add to your library:
+                  </p>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {Object.entries(STATUS_LABELS).map(([key, lbl]) => (
+                      <button key={key} onClick={() => handleAddToLibrary(key)}
+                        disabled={!!adding}
+                        style={btn(key === 'want_to_read' ? 'accent' : 'primary', 'sm')}>
+                        {adding === key ? 'Adding…' : `${STATUS_ICONS[key]} ${lbl}`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )
+            }
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
+// Auth page
+// ================================================================
+function AuthPage({ inviteFrom }) {
+  const [mode, setMode] = useState(inviteFrom ? 'signup' : 'signin')
+  const [email, setEmail]           = useState('')
+  const [password, setPassword]     = useState('')
+  const [username, setUsername]     = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [loading, setLoading]       = useState(false)
+  const [msg, setMsg]               = useState(null)
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setLoading(true); setMsg(null)
+    try {
+      if (mode === 'magic') {
+        const { error } = await supabase.auth.signInWithOtp({ email })
+        if (error) throw error
+        setMsg({ type: 'success', text: 'Check your email for a magic link! ✉️' })
+      } else if (mode === 'signup') {
+        if (!username.trim()) throw new Error('Please choose a username.')
+        const { data, error } = await supabase.auth.signUp({
+          email, password,
+          options: { data: { display_name: displayName || username } },
+        })
+        if (error) throw error
+        if (data.user) {
+          await supabase.from('profiles').upsert({
+            id: data.user.id,
+            username: username.toLowerCase().trim(),
+            display_name: (displayName || username).trim(),
+          }, { onConflict: 'id' })
+        }
+        setMsg({ type: 'success', text: 'Account created! Check your email to confirm, then sign in.' })
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email, password })
+        if (error) throw error
+      }
+    } catch (err) {
+      setMsg({ type: 'error', text: err.message })
+    }
+    setLoading(false)
+  }
+
+  const tabBtn = (m, lbl) => (
+    <button onClick={() => setMode(m)} style={{
+      flex: 1, padding: '10px 0', border: 'none', cursor: 'pointer',
+      background: 'none', fontFamily: f.sans, fontSize: 13, fontWeight: 600,
+      color: mode === m ? C.primary : C.muted,
+      borderBottom: mode === m ? `2px solid ${C.primary}` : '2px solid transparent',
+    }}>{lbl}</button>
+  )
+
+  return (
+    <div style={{
+      minHeight: '100vh', background: C.bg,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}>
+      <div style={{
+        width: 380, background: C.surface, borderRadius: 14,
+        padding: 36, border: `1px solid ${C.border}`,
+        boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+      }}>
+        <div style={{ textAlign: 'center', marginBottom: 28 }}>
+          <div style={{ fontSize: 48, marginBottom: 8 }}>📚</div>
+          <h1 style={{ margin: '0 0 4px', color: C.text, fontSize: 26, fontFamily: f.serif, fontWeight: 700 }}>
+            BookList
+          </h1>
+          <p style={{ margin: 0, color: C.muted, fontSize: 13, fontFamily: f.sans }}>
+            {inviteFrom ? "You've been invited! Create an account to connect." : 'Your literary life, organized'}
+          </p>
+        </div>
+
+        <div style={{ display: 'flex', borderBottom: `1px solid ${C.border}`, marginBottom: 24 }}>
+          {tabBtn('signin', 'Sign In')}
+          {tabBtn('signup', 'Sign Up')}
+          {tabBtn('magic', 'Magic Link')}
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          {mode === 'signup' && <>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', fontSize: 11, color: C.muted, marginBottom: 4, fontFamily: f.sans, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>Username</label>
+              <input style={inputStyle} value={username}
+                onChange={e => setUsername(e.target.value.replace(/\s/g, ''))}
+                placeholder="your_username" required />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', fontSize: 11, color: C.muted, marginBottom: 4, fontFamily: f.sans, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>Display Name</label>
+              <input style={inputStyle} value={displayName}
+                onChange={e => setDisplayName(e.target.value)}
+                placeholder="Your Name (optional)" />
+            </div>
+          </>}
+
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ display: 'block', fontSize: 11, color: C.muted, marginBottom: 4, fontFamily: f.sans, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>Email</label>
+            <input style={inputStyle} type="email" value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="you@example.com" required />
+          </div>
+
+          {mode !== 'magic' && (
+            <div style={{ marginBottom: 24 }}>
+              <label style={{ display: 'block', fontSize: 11, color: C.muted, marginBottom: 4, fontFamily: f.sans, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>Password</label>
+              <input style={inputStyle} type="password" value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="••••••••" minLength={mode === 'signup' ? 8 : undefined} required />
+            </div>
+          )}
+          {mode === 'magic' && <div style={{ marginBottom: 24 }} />}
+
+          {msg && (
+            <p style={{ margin: '0 0 14px', fontSize: 13, fontFamily: f.sans,
+              color: msg.type === 'success' ? C.success : C.danger,
+              background: msg.type === 'success' ? 'rgba(52,211,153,0.1)' : 'rgba(248,113,113,0.1)',
+              padding: '8px 12px', borderRadius: 6,
+            }}>{msg.text}</p>
+          )}
+
+          <button type="submit" disabled={loading}
+            style={{ ...btn('primary', 'lg'), width: '100%', justifyContent: 'center' }}>
+            {loading ? 'Please wait…'
+              : mode === 'signin'  ? 'Sign In'
+              : mode === 'signup'  ? 'Create Account'
+              : 'Send Magic Link'}
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
+// Home page – rows + inline search
+// ================================================================
+function HomePage({ userId, setView }) {
+  const [searchQ,      setSearchQ]      = useState('')
+  const [searchRes,    setSearchRes]    = useState([])
+  const [searching,    setSearching]    = useState(false)
+  const [searchErr,    setSearchErr]    = useState(null)
+  const [searchSource, setSearchSource] = useState(null)
+
+  const [myBooks,      setMyBooks]      = useState([])
+  const [friendBooks,  setFriendBooks]  = useState([])
+  const [friendProfiles, setFriendProfiles] = useState({})
+  const [genreRecs,    setGenreRecs]    = useState([])
+  const [loadingData,  setLoadingData]  = useState(true)
+  const [myBookIds,    setMyBookIds]    = useState(new Set())
+
+  const [modal,        setModal]        = useState(null)
+  const debounceRef = useRef(null)
+
+  const loadHomeData = useCallback(async () => {
+    setLoadingData(true)
+
+    // My library
+    const { data: myLib } = await supabase
+      .from('user_books').select('*, books(*)').eq('user_id', userId)
+      .order('updated_at', { ascending: false })
+    const lib = myLib || []
+    setMyBooks(lib)
+    const ids = new Set(lib.map(u => u.book_id))
+    setMyBookIds(ids)
+
+    // Friends' books
+    const { data: fships } = await supabase.from('friendships')
+      .select('requester_id, addressee_id')
+      .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`)
+      .eq('status', 'accepted')
+
+    if (fships?.length > 0) {
+      const friendIds = fships.map(f => f.requester_id === userId ? f.addressee_id : f.requester_id)
+      const [{ data: fBooks }, { data: fProfs }] = await Promise.all([
+        supabase.from('user_books').select('*, books(*)').in('user_id', friendIds)
+          .order('updated_at', { ascending: false }).limit(40),
+        supabase.from('profiles').select('id, display_name, username').in('id', friendIds),
+      ])
+      setFriendBooks(fBooks || [])
+      setFriendProfiles(Object.fromEntries((fProfs || []).map(p => [p.id, p])))
+
+      // Genre recs from top-rated books
+      const topRated = lib.filter(u => (u.rating || 0) >= 4)
+      const cats = [...new Set(topRated.flatMap(u => u.books?.categories || []))]
+      if (cats.length > 0) {
+        const cat = cats[Math.floor(Math.random() * cats.length)]
+        try {
+          const { results } = await searchBooks(`subject:"${cat}"`, 10)
+          setGenreRecs(results.filter(b => !ids.has(b.id)).slice(0, 8).map(b => ({ ...b, reason: cat })))
+        } catch (_) { /* genre recs are optional */ }
+      }
+    }
+
+    setLoadingData(false)
+  }, [userId])
+
+  useEffect(() => { loadHomeData() }, [loadHomeData])
+
+  // Debounced search
+  useEffect(() => {
+    if (!searchQ.trim()) { setSearchRes([]); setSearchErr(null); setSearchSource(null); return }
+    clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(async () => {
+      setSearching(true)
+      setSearchErr(null)
+      try {
+        const { results, source } = await searchBooks(searchQ, 20)
+        setSearchRes(results)
+        setSearchSource(source)
+      } catch (err) {
+        setSearchErr(err.message)
+        setSearchRes([])
+      }
+      setSearching(false)
+    }, 420)
+    return () => clearTimeout(debounceRef.current)
+  }, [searchQ])
+
+  const reading     = myBooks.filter(u => u.status === 'reading')
+  const wantToRead  = myBooks.filter(u => u.status === 'want_to_read')
+  const friendReading = friendBooks.filter(u => u.status === 'reading')
+  const friendWant    = friendBooks.filter(u => u.status === 'want_to_read')
+  const friendFaves   = friendBooks.filter(u => u.status === 'read' && (u.rating || 0) >= 4)
+
+  const isSearching = searchQ.trim().length > 0
+
+  return (
+    <div>
+      {/* Search bar */}
+      <div style={{ marginBottom: 32, position: 'relative' }}>
+        <input
+          value={searchQ}
+          onChange={e => setSearchQ(e.target.value)}
+          placeholder="🔍  Search books by title, author, or ISBN…"
+          style={{
+            ...inputStyle,
+            fontSize: 15, padding: '13px 18px',
+            borderRadius: 10, border: `1px solid ${isSearching ? C.primary : C.border}`,
+          }}
+        />
+        {searchQ && (
+          <button onClick={() => setSearchQ('')}
+            style={{
+              position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)',
+              background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 18,
+            }}>×</button>
+        )}
+      </div>
+
+      {/* Search results */}
+      {isSearching ? (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 16 }}>
+            <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontFamily: f.sans }}>
+              {searching ? 'Searching…' : `Results for "${searchQ}"`}
+            </h2>
+            {!searching && searchSource === 'openlibrary' && (
+              <span style={{ fontSize: 11, color: C.muted, fontFamily: f.sans }}>via Open Library</span>
+            )}
+          </div>
+          {searching ? <Spinner /> : searchErr ? (
+            <div style={{
+              background: 'rgba(248,113,113,0.1)', border: `1px solid ${C.danger}`,
+              borderRadius: 8, padding: '14px 18px',
+            }}>
+              <p style={{ margin: '0 0 4px', color: C.danger, fontFamily: f.sans, fontSize: 14, fontWeight: 700 }}>
+                Search failed
+              </p>
+              <p style={{ margin: 0, color: C.muted, fontFamily: f.sans, fontSize: 13 }}>
+                {searchErr}
+              </p>
+              <p style={{ margin: '8px 0 0', color: C.muted, fontFamily: f.sans, fontSize: 12 }}>
+                Tip: add a free Google Books API key to <code style={{ color: C.primary }}>.env.local</code> as{' '}
+                <code style={{ color: C.primary }}>VITE_GOOGLE_BOOKS_API_KEY</code> to avoid rate limits.
+              </p>
+            </div>
+          ) : searchRes.length === 0
+            ? <EmptyState icon="🔍" message="No results found" sub="Try a different title or author name" />
+            : (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
+                gap: 16,
+              }}>
+                {searchRes.map(book => (
+                  <PosterCard key={book.id} book={book}
+                    onClick={() => setModal({ type: 'search', book })} />
+                ))}
+              </div>
+            )
+          }
+        </div>
+      ) : (
+        <>
+          <HorizontalRow
+            title="📖 Currently Reading"
+            items={reading}
+            renderItem={ub => (
+              <PosterCard key={ub.id} userBook={ub}
+                onClick={() => setModal({ type: 'library', userBook: ub })} />
+            )}
+            emptyMsg="Nothing in progress — find your next read below"
+            loading={loadingData}
+            seeAllAction={() => setView('mylist')}
+          />
+
+          <HorizontalRow
+            title="🔖 Want to Read"
+            items={wantToRead}
+            renderItem={ub => (
+              <PosterCard key={ub.id} userBook={ub}
+                onClick={() => setModal({ type: 'library', userBook: ub })} />
+            )}
+            emptyMsg="Your reading queue is empty"
+            loading={loadingData}
+            seeAllAction={() => setView('mylist')}
+          />
+
+          <HorizontalRow
+            title="👥 Friends Are Reading"
+            items={friendReading}
+            renderItem={ub => (
+              <div key={ub.id} style={{ flexShrink: 0 }}>
+                <PosterCard userBook={ub}
+                  onClick={() => setModal({ type: 'friendbook', book: ub.books, userBook: ub })} />
+                <p style={{ margin: '4px 0 0', fontSize: 10, color: C.muted, fontFamily: f.sans,
+                  width: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {friendProfiles[ub.user_id]?.display_name || ''}
+                </p>
+              </div>
+            )}
+            emptyMsg="Add friends to see what they're reading"
+            loading={loadingData}
+          />
+
+          <HorizontalRow
+            title="📚 Friends Want to Read"
+            items={friendWant.slice(0, 12)}
+            renderItem={ub => (
+              <div key={ub.id} style={{ flexShrink: 0 }}>
+                <PosterCard userBook={ub}
+                  onClick={() => setModal({ type: 'friendbook', book: ub.books, userBook: ub })} />
+                <p style={{ margin: '4px 0 0', fontSize: 10, color: C.muted, fontFamily: f.sans,
+                  width: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {friendProfiles[ub.user_id]?.display_name || ''}
+                </p>
+              </div>
+            )}
+            emptyMsg="No friends on the app yet"
+            loading={loadingData}
+          />
+
+          <HorizontalRow
+            title="⭐ Friends' Favorites"
+            items={friendFaves.slice(0, 12)}
+            renderItem={ub => (
+              <div key={ub.id} style={{ flexShrink: 0 }}>
+                <PosterCard userBook={ub}
+                  onClick={() => setModal({ type: 'friendbook', book: ub.books, userBook: ub })} />
+                <p style={{ margin: '4px 0 0', fontSize: 10, color: C.muted, fontFamily: f.sans,
+                  width: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {friendProfiles[ub.user_id]?.display_name || ''}
+                </p>
+              </div>
+            )}
+            emptyMsg="Your friends haven't rated books yet"
+            loading={loadingData}
+          />
+
+          {genreRecs.length > 0 && (
+            <HorizontalRow
+              title="✨ Suggested for You"
+              items={genreRecs}
+              renderItem={book => (
+                <PosterCard key={book.id} book={book}
+                  onClick={() => setModal({ type: 'search', book })} />
+              )}
+              emptyMsg=""
+              loading={false}
+            />
+          )}
+        </>
+      )}
+
+      {/* Detail modal */}
+      {modal && (
+        <BookDetailModal
+          item={modal.type === 'library' ? modal.userBook : (modal.book || modal.userBook?.books)}
+          userId={userId}
+          onClose={() => setModal(null)}
+          onUpdate={() => { setModal(null); loadHomeData() }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ================================================================
+// My List page – poster grid with filter pills
+// ================================================================
+function MyListPage({ userId }) {
+  const [filter,    setFilter]    = useState('all')
+  const [userBooks, setUserBooks] = useState([])
+  const [loading,   setLoading]   = useState(true)
+  const [modal,     setModal]     = useState(null)
+  const [dragIdx,   setDragIdx]   = useState(null)
+  const [overIdx,   setOverIdx]   = useState(null)
+
+  const fetchBooks = useCallback(async () => {
+    setLoading(true)
+    const { data } = await supabase
+      .from('user_books').select('*, books(*)')
+      .eq('user_id', userId)
+      .order('position', { ascending: true })
+      .order('created_at', { ascending: false })
+    setUserBooks(data || [])
+    setLoading(false)
+  }, [userId])
+
+  useEffect(() => { fetchBooks() }, [fetchBooks])
+
+  async function handleReorder(reordered) {
+    setUserBooks(prev => {
+      const nonWtr = prev.filter(u => u.status !== 'want_to_read')
+      return [...nonWtr, ...reordered]
+    })
+    await Promise.all(
+      reordered.map((ub, idx) =>
+        supabase.from('user_books').update({ position: idx }).eq('id', ub.id)
+      )
+    )
+  }
+
+  const counts = {
+    all:          userBooks.length,
+    reading:      userBooks.filter(u => u.status === 'reading').length,
+    read:         userBooks.filter(u => u.status === 'read').length,
+    want_to_read: userBooks.filter(u => u.status === 'want_to_read').length,
+  }
+
+  const visible = filter === 'all' ? userBooks : userBooks.filter(u => u.status === filter)
+  const isQueue = filter === 'want_to_read'
+
+  // Drag for want_to_read queue
+  function onDragStart(e, idx) { setDragIdx(idx); e.dataTransfer.effectAllowed = 'move' }
+  function onDragOver(e, idx)  { e.preventDefault(); if (idx !== overIdx) setOverIdx(idx) }
+  function onDrop(e, idx) {
+    e.preventDefault()
+    if (dragIdx === null || dragIdx === idx) return
+    const wtr = visible.slice()
+    const [moved] = wtr.splice(dragIdx, 1)
+    wtr.splice(idx, 0, moved)
+    setDragIdx(null); setOverIdx(null)
+    handleReorder(wtr)
+  }
+
+  return (
+    <div>
+      {/* Filter pills */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 24, flexWrap: 'wrap' }}>
+        {[
+          ['all', 'All', counts.all],
+          ['reading', '📖 Reading', counts.reading],
+          ['read', '✅ Read', counts.read],
+          ['want_to_read', '🔖 Want to Read', counts.want_to_read],
+        ].map(([key, lbl, count]) => (
+          <button key={key} onClick={() => setFilter(key)} style={pill(filter === key)}>
+            {lbl}
+            <span style={{
+              marginLeft: 6, fontSize: 11, fontFamily: f.sans, fontWeight: 700,
+              padding: '1px 6px', borderRadius: 10,
+              background: filter === key ? 'rgba(255,255,255,0.2)' : C.border,
+              color: filter === key ? C.white : C.muted,
+            }}>{count}</span>
+          </button>
+        ))}
+      </div>
+
+      {isQueue && visible.length > 1 && (
+        <p style={{ margin: '0 0 16px', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
+          ⠿ Drag covers to reorder your queue
+        </p>
+      )}
+
+      {loading ? <Spinner /> : visible.length === 0
+        ? <EmptyState message="Nothing here yet" sub='Search for books to add them to your library' />
+        : (
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
+            gap: 16,
+          }}>
+            {visible.map((ub, idx) => (
+              <div key={ub.id}
+                draggable={isQueue}
+                onDragStart={isQueue ? e => onDragStart(e, idx) : undefined}
+                onDragOver={isQueue ? e => onDragOver(e, idx) : undefined}
+                onDrop={isQueue ? e => onDrop(e, idx) : undefined}
+                onDragEnd={() => { setDragIdx(null); setOverIdx(null) }}
+                style={{
+                  opacity: isQueue && dragIdx === idx ? 0.4 : 1,
+                  outline: isQueue && overIdx === idx && dragIdx !== idx
+                    ? `2px solid ${C.primary}` : '2px solid transparent',
+                  borderRadius: 10, transition: 'opacity 0.15s',
+                }}
+              >
+                <PosterCard
+                  userBook={ub}
+                  onClick={() => setModal(ub)}
+                />
+              </div>
+            ))}
+          </div>
+        )
+      }
+
+      {modal && (
+        <BookDetailModal
+          item={modal}
+          userId={userId}
+          onClose={() => setModal(null)}
+          onUpdate={() => { setModal(null); fetchBooks() }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ================================================================
+// Friends page
+// ================================================================
+function FriendsPage({ userId }) {
+  const [searchQ,    setSearchQ]    = useState('')
+  const [searchRes,  setSearchRes]  = useState([])
+  const [searching,  setSearching]  = useState(false)
+  const [friends,    setFriends]    = useState([])
+  const [incoming,   setIncoming]   = useState([])
+  const [outgoing,   setOutgoing]   = useState([])
+  const [profileMap, setProfileMap] = useState({})
+  const [loading,    setLoading]    = useState(true)
+  const [inviteCopied, setInviteCopied] = useState(false)
+
+  function copyInviteLink() {
+    const link = `${window.location.origin}${window.location.pathname}?invite=${userId}`
+    navigator.clipboard.writeText(link).then(() => {
+      setInviteCopied(true)
+      setTimeout(() => setInviteCopied(false), 2500)
+    })
+  }
+
+  const loadFriendships = useCallback(async () => {
+    setLoading(true)
+    const { data: fships } = await supabase.from('friendships').select('*')
+      .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`)
+    if (!fships) { setLoading(false); return }
+
+    const allIds = [...new Set(fships.flatMap(f => [f.requester_id, f.addressee_id]))]
+    const { data: profiles } = await supabase.from('profiles').select('*').in('id', allIds)
+    const pm = Object.fromEntries((profiles || []).map(p => [p.id, p]))
+    setProfileMap(pm)
+
+    const accepted = fships.filter(f => f.status === 'accepted')
+    const pend     = fships.filter(f => f.status === 'pending')
+    setFriends(accepted.map(f => ({
+      ...f,
+      friendId:      f.requester_id === userId ? f.addressee_id : f.requester_id,
+      friendProfile: pm[f.requester_id === userId ? f.addressee_id : f.requester_id],
+    })))
+    setIncoming(pend.filter(f => f.addressee_id === userId).map(f => ({ ...f, requesterProfile: pm[f.requester_id] })))
+    setOutgoing(pend.filter(f => f.requester_id === userId).map(f => ({ ...f, addresseeProfile: pm[f.addressee_id] })))
+    setLoading(false)
+  }, [userId])
+
+  useEffect(() => { loadFriendships() }, [loadFriendships])
+
+  async function searchUsers(e) {
+    e?.preventDefault()
+    if (!searchQ.trim()) return
+    setSearching(true)
+    const { data } = await supabase.from('profiles').select('*')
+      .or(`username.ilike.%${searchQ}%,display_name.ilike.%${searchQ}%`)
+      .neq('id', userId).limit(8)
+    setSearchRes(data || [])
+    setSearching(false)
+  }
+
+  async function sendRequest(addresseeId) {
+    const { error } = await supabase.from('friendships').insert({ requester_id: userId, addressee_id: addresseeId })
+    if (error) { alert(error.message); return }
+    setSearchRes([]); setSearchQ(''); loadFriendships()
+  }
+
+  async function respond(id, status) {
+    await supabase.from('friendships').update({ status }).eq('id', id)
+    loadFriendships()
+  }
+
+  async function remove(id) {
+    await supabase.from('friendships').delete().eq('id', id)
+    loadFriendships()
+  }
+
+  const connected = new Set([
+    ...friends.map(f => f.friendId),
+    ...incoming.map(f => f.requester_id),
+    ...outgoing.map(f => f.addressee_id),
+  ])
+
+  const sectionHdr = (text) => (
+    <h3 style={{ margin: '0 0 14px', color: C.text, fontSize: 15, fontFamily: f.sans, fontWeight: 700 }}>{text}</h3>
+  )
+
+  const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 18, marginBottom: 16 }
+
+  return (
+    <div style={{ maxWidth: 560 }}>
+      {/* Invite link */}
+      <div style={{
+        ...card,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+      }}>
+        <div>
+          <p style={{ margin: '0 0 3px', fontWeight: 700, color: C.text, fontFamily: f.sans, fontSize: 14 }}>
+            📨 Invite a Friend
+          </p>
+          <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans }}>
+            Share your personal invite link — they'll be auto-connected when they sign up.
+          </p>
+        </div>
+        <button onClick={copyInviteLink}
+          style={{ ...btn(inviteCopied ? 'subtle' : 'accent', 'sm'), flexShrink: 0 }}>
+          {inviteCopied ? '✓ Copied!' : '🔗 Copy Link'}
+        </button>
+      </div>
+
+      {/* Find readers */}
+      <div style={{ ...card }}>
+        {sectionHdr('🔍 Find Readers')}
+        <form onSubmit={searchUsers} style={{ display: 'flex', gap: 8 }}>
+          <input style={{ ...inputStyle, flex: 1 }} value={searchQ}
+            onChange={e => setSearchQ(e.target.value)}
+            placeholder="Search by username or name…" />
+          <button type="submit" style={btn('primary', 'sm')} disabled={searching}>
+            {searching ? '…' : 'Search'}
+          </button>
+        </form>
+        {searchRes.map(p => (
+          <div key={p.id} style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '10px 0', borderBottom: `1px solid ${C.border}`,
+          }}>
+            <div>
+              <p style={{ margin: 0, fontWeight: 700, color: C.text, fontFamily: f.sans, fontSize: 14 }}>
+                {p.display_name || p.username}
+              </p>
+              <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans }}>@{p.username}</p>
+            </div>
+            {connected.has(p.id)
+              ? <span style={{ fontSize: 12, color: C.muted, fontFamily: f.sans }}>Already connected</span>
+              : <button onClick={() => sendRequest(p.id)} style={btn('primary', 'sm')}>Add Friend</button>
+            }
+          </div>
+        ))}
+      </div>
+
+      {/* Incoming requests */}
+      {incoming.length > 0 && (
+        <div style={card}>
+          {sectionHdr(`📬 Friend Requests (${incoming.length})`)}
+          {incoming.map(f => (
+            <div key={f.id} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '10px 0', borderBottom: `1px solid ${C.border}`,
+            }}>
+              <div>
+                <p style={{ margin: 0, fontWeight: 700, color: C.text, fontFamily: f.sans }}>
+                  {f.requesterProfile?.display_name || f.requesterProfile?.username || 'Unknown'}
+                </p>
+                <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans }}>
+                  @{f.requesterProfile?.username}
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => respond(f.id, 'accepted')} style={btn('primary', 'sm')}>Accept</button>
+                <button onClick={() => respond(f.id, 'declined')} style={btn('danger', 'sm')}>Decline</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Outgoing */}
+      {outgoing.length > 0 && (
+        <div style={card}>
+          {sectionHdr('Sent Requests')}
+          {outgoing.map(f => (
+            <div key={f.id} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '10px 0', borderBottom: `1px solid ${C.border}`,
+            }}>
+              <div>
+                <p style={{ margin: 0, color: C.text, fontFamily: f.sans }}>
+                  {f.addresseeProfile?.display_name || f.addresseeProfile?.username || 'Unknown'}
+                </p>
+                <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans }}>Pending…</p>
+              </div>
+              <button onClick={() => remove(f.id)} style={btn('subtle', 'sm')}>Cancel</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Friends list */}
+      {sectionHdr(`My Reading Circle (${friends.length})`)}
+      {loading ? <Spinner /> : friends.length === 0
+        ? <EmptyState icon="👥" message="No friends yet" sub="Search above to find other readers" />
+        : friends.map(f => (
+            <div key={f.id} style={card}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <p style={{ margin: 0, fontWeight: 700, fontSize: 15, color: C.text, fontFamily: f.sans }}>
+                    {f.friendProfile?.display_name || f.friendProfile?.username || 'Unknown'}
+                  </p>
+                  <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans }}>
+                    @{f.friendProfile?.username}
+                  </p>
+                </div>
+                <button onClick={() => remove(f.id)} style={btn('subtle', 'sm')}>Unfriend</button>
+              </div>
+            </div>
+          ))
+      }
+    </div>
+  )
+}
+
+// ================================================================
+// Activity page – timeline feed
+// ================================================================
+function ActivityPage({ userId }) {
+  const [feed,       setFeed]       = useState([])
+  const [profileMap, setProfileMap] = useState({})
+  const [received,   setReceived]   = useState([])
+  const [loading,    setLoading]    = useState(true)
+  const [modal,      setModal]      = useState(null)
+  const [myBookIds,  setMyBookIds]  = useState(new Set())
+
+  useEffect(() => { loadActivity() }, [userId])
+
+  async function loadActivity() {
+    setLoading(true)
+
+    // My book IDs
+    const { data: myLib } = await supabase.from('user_books').select('book_id').eq('user_id', userId)
+    setMyBookIds(new Set((myLib || []).map(r => r.book_id)))
+
+    // Friends
+    const { data: fships } = await supabase.from('friendships')
+      .select('requester_id, addressee_id')
+      .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`)
+      .eq('status', 'accepted')
+
+    if (!fships?.length) { setLoading(false); return }
+
+    const friendIds = fships.map(f => f.requester_id === userId ? f.addressee_id : f.requester_id)
+    const [{ data: acts }, { data: profs }, { data: recs }] = await Promise.all([
+      supabase.from('user_books').select('*, books(*)').in('user_id', friendIds)
+        .order('updated_at', { ascending: false }).limit(60),
+      supabase.from('profiles').select('id, display_name, username').in('id', friendIds),
+      supabase.from('book_recommendations').select('*, books(*)')
+        .eq('to_user_id', userId).order('created_at', { ascending: false }).limit(10),
+    ])
+
+    setFeed(acts || [])
+    setProfileMap(Object.fromEntries((profs || []).map(p => [p.id, p])))
+
+    // Enrich received recs with sender profiles
+    if (recs?.length) {
+      const fromIds = [...new Set(recs.map(r => r.from_user_id))]
+      const { data: fromProfs } = await supabase.from('profiles').select('id, display_name, username').in('id', fromIds)
+      const pm2 = Object.fromEntries((fromProfs || []).map(p => [p.id, p]))
+      setReceived(recs.map(r => ({ ...r, fromProfile: pm2[r.from_user_id] })))
+    }
+
+    setLoading(false)
+  }
+
+  async function addRecBook(book, status) {
+    await addToLibrary(userId, book, status)
+    setMyBookIds(prev => new Set([...prev, book.id]))
+  }
+
+  if (loading) return <Spinner text="Loading activity…" />
+
+  if (!feed.length && !received.length) {
+    return <EmptyState icon="📡" message="No activity yet"
+      sub="Add friends to see what they're reading and rating" />
+  }
+
+  return (
+    <div style={{ maxWidth: 600 }}>
+      {/* Received recommendations */}
+      {received.length > 0 && (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 18, marginBottom: 28 }}>
+          <h3 style={{ margin: '0 0 16px', color: C.text, fontSize: 15, fontFamily: f.sans, fontWeight: 700 }}>
+            📬 Recommended to You ({received.length})
+          </h3>
+          {received.map(rec => (
+            <div key={rec.id} style={{
+              display: 'flex', gap: 14, paddingBottom: 14, marginBottom: 14,
+              borderBottom: `1px solid ${C.border}`,
+            }}>
+              <div style={{ flexShrink: 0, cursor: 'pointer' }}
+                onClick={() => setModal({ type: 'search', book: rec.books })}>
+                {rec.books?.cover_url
+                  ? <img src={rec.books.cover_url} alt={rec.books.title}
+                      style={{ width: 48, height: 72, objectFit: 'cover', borderRadius: 5 }} />
+                  : <NoCover title={rec.books?.title} width={48} height={72} />
+                }
+              </div>
+              <div style={{ flex: 1 }}>
+                <p style={{ margin: '0 0 2px', fontWeight: 700, fontSize: 14, color: C.text, fontFamily: f.sans }}>
+                  {rec.books?.title}
+                </p>
+                <p style={{ margin: '0 0 4px', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
+                  From {rec.fromProfile?.display_name || rec.fromProfile?.username || 'a friend'}
+                  {' · '}{timeAgo(rec.created_at)}
+                </p>
+                {rec.message && (
+                  <p style={{ margin: '0 0 8px', fontSize: 12, color: C.text, fontStyle: 'italic', fontFamily: f.sans }}>
+                    "{rec.message}"
+                  </p>
+                )}
+                {!myBookIds.has(rec.book_id) && (
+                  <button onClick={() => addRecBook(rec.books, 'want_to_read')}
+                    style={btn('accent', 'sm')}>+ Add to Queue</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Activity feed */}
+      <h3 style={{ margin: '0 0 16px', color: C.text, fontSize: 15, fontFamily: f.sans, fontWeight: 700 }}>
+        🕐 Recent Activity
+      </h3>
+
+      {feed.map(ub => {
+        const profile = profileMap[ub.user_id]
+        const book = ub.books || {}
+        return (
+          <div key={ub.id} style={{
+            display: 'flex', gap: 14, paddingBottom: 16, marginBottom: 16,
+            borderBottom: `1px solid ${C.border}`,
+          }}>
+            <div style={{ flexShrink: 0, cursor: 'pointer' }}
+              onClick={() => setModal({ type: 'friendbook', book, userBook: ub })}>
+              {book.cover_url
+                ? <img src={book.cover_url} alt={book.title}
+                    style={{ width: 48, height: 72, objectFit: 'cover', borderRadius: 5 }} />
+                : <NoCover title={book.title} width={48} height={72} />
+              }
+            </div>
+            <div style={{ flex: 1 }}>
+              <p style={{ margin: '0 0 4px', fontSize: 14, color: C.text, fontFamily: f.sans }}>
+                <span style={{ fontWeight: 700 }}>{profile?.display_name || profile?.username || 'Someone'}</span>
+                {' '}
+                <span style={{ color: C.muted }}>
+                  {ub.status === 'reading' ? 'is reading' : ub.status === 'read' ? 'finished' : 'added to queue'}
+                </span>
+              </p>
+              <p style={{ margin: '0 0 4px', fontWeight: 700, fontSize: 13, color: C.text, fontFamily: f.sans }}>
+                {book.title}
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <StatusBadge status={ub.status} />
+                {ub.rating && <StarRating value={ub.rating} readonly size={13} />}
+                <span style={{ fontSize: 11, color: C.muted, fontFamily: f.sans }}>
+                  {timeAgo(ub.updated_at)}
+                </span>
+              </div>
+            </div>
+          </div>
+        )
+      })}
+
+      {modal && (
+        <BookDetailModal
+          item={modal.type === 'friendbook' ? modal.book : modal.book}
+          userId={userId}
+          onClose={() => setModal(null)}
+          onUpdate={() => { setModal(null); loadActivity() }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ================================================================
+// Nav
+// ================================================================
+function Nav({ view, setView, profile, onSignOut }) {
+  const tabs = [
+    ['home',    '🏠', 'Home'],
+    ['mylist',  '📚', 'My List'],
+    ['friends', '👥', 'Friends'],
+    ['activity','📡', 'Activity'],
+  ]
+  return (
+    <nav style={{
+      background: C.nav, borderBottom: `1px solid ${C.border}`,
+      position: 'sticky', top: 0, zIndex: 100,
+    }}>
+      <div style={{
+        maxWidth: 960, margin: '0 auto', padding: '0 20px',
+        display: 'flex', alignItems: 'center', height: 56,
+      }}>
+        {/* Logo */}
+        <div style={{
+          fontFamily: f.serif, fontWeight: 700, fontSize: 18,
+          color: C.text, marginRight: 28, letterSpacing: '-0.01em', flexShrink: 0,
+        }}>
+          📚 BookList
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display: 'flex', flex: 1, gap: 2 }}>
+          {tabs.map(([key, icon, lbl]) => (
+            <button key={key} onClick={() => setView(key)} style={{
+              padding: '8px 14px', border: 'none', cursor: 'pointer',
+              background: 'none', fontFamily: f.sans, fontSize: 13, fontWeight: 600,
+              color: view === key ? C.primary : C.muted,
+              borderBottom: view === key ? `2px solid ${C.primary}` : '2px solid transparent',
+              transition: 'color 0.15s', display: 'flex', alignItems: 'center', gap: 5,
+            }}>
+              {icon} {lbl}
+            </button>
+          ))}
+        </div>
+
+        {/* User */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          {profile && (
+            <span style={{ fontSize: 13, color: C.muted, fontFamily: f.sans,
+              maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {profile.display_name || profile.username}
+            </span>
+          )}
+          <button onClick={onSignOut} style={{
+            padding: '5px 12px', border: `1px solid ${C.border}`,
+            borderRadius: 5, background: C.surface2, color: C.muted,
+            cursor: 'pointer', fontSize: 12, fontFamily: f.sans,
+          }}>
+            Sign Out
+          </button>
+        </div>
+      </div>
+    </nav>
+  )
+}
+
+// ================================================================
+// Root App
+// ================================================================
+export default function App() {
+  const [session, setSession] = useState(undefined)
+  const [profile, setProfile] = useState(null)
+  const [view,    setView]    = useState('home')
+
+  // Capture invite param on load
+  const inviteFromRef = useRef(new URLSearchParams(window.location.search).get('invite'))
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => setSession(session))
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => setSession(s))
+    return () => subscription.unsubscribe()
+  }, [])
+
+  useEffect(() => {
+    if (!session?.user) { setProfile(null); return }
+    supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle()
+      .then(({ data }) => setProfile(data))
+
+    // Handle invite link — auto-send friend request once
+    const inviteFrom = inviteFromRef.current
+    if (inviteFrom && inviteFrom !== session.user.id) {
+      inviteFromRef.current = null // only once
+      // Clean URL without reloading
+      window.history.replaceState({}, '', window.location.pathname)
+      // Check not already friends, then send request
+      supabase.from('friendships')
+        .select('id').or(
+          `and(requester_id.eq.${session.user.id},addressee_id.eq.${inviteFrom}),` +
+          `and(requester_id.eq.${inviteFrom},addressee_id.eq.${session.user.id})`
+        ).maybeSingle()
+        .then(({ data: existing }) => {
+          if (!existing) {
+            supabase.from('friendships').insert({
+              requester_id: session.user.id,
+              addressee_id: inviteFrom,
+            }).then(() => setView('friends'))
+          }
+        })
+    }
+  }, [session])
+
+  if (session === undefined) {
+    return (
+      <div style={{
+        minHeight: '100vh', background: C.bg,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <p style={{ color: C.muted, fontFamily: f.sans, fontStyle: 'italic' }}>
+          Opening your library…
+        </p>
+      </div>
+    )
+  }
+
+  if (!session) return <AuthPage inviteFrom={inviteFromRef.current} />
+
+  const userId = session.user.id
+
+  return (
+    <div style={{ minHeight: '100vh', background: C.bg }}>
+      <Nav view={view} setView={setView} profile={profile}
+        onSignOut={() => supabase.auth.signOut()} />
+      <main style={{ maxWidth: 960, margin: '0 auto', padding: '32px 20px 80px' }}>
+        {view === 'home'     && <HomePage     userId={userId} setView={setView} />}
+        {view === 'mylist'   && <MyListPage   userId={userId} />}
+        {view === 'friends'  && <FriendsPage  userId={userId} />}
+        {view === 'activity' && <ActivityPage userId={userId} />}
+      </main>
+    </div>
+  )
+}
