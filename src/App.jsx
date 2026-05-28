@@ -852,12 +852,19 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
 // ================================================================
 // Auth page
 // ================================================================
+// Deterministic auto-avatar: consistent per email, never changes on re-signup
+function autoAvatar(email) {
+  const sum = [...(email || 'book')].reduce((a, c) => a + c.charCodeAt(0), 0)
+  return LITERARY_EMOJIS[sum % LITERARY_EMOJIS.length]
+}
+
 function AuthPage({ inviteFrom }) {
   const [mode, setMode] = useState(inviteFrom ? 'signup' : 'signin')
   const [email, setEmail]           = useState('')
   const [password, setPassword]     = useState('')
   const [username, setUsername]     = useState('')
   const [displayName, setDisplayName] = useState('')
+  const [avatar, setAvatar]         = useState('')   // '' = auto-assign at submit
   const [loading, setLoading]       = useState(false)
   const [msg, setMsg]               = useState(null)
 
@@ -871,6 +878,7 @@ function AuthPage({ inviteFrom }) {
         setMsg({ type: 'success', text: 'Check your email for a magic link! ✉️' })
       } else if (mode === 'signup') {
         if (!username.trim()) throw new Error('Please choose a username.')
+        const chosenAvatar = avatar || autoAvatar(email)
         const { data, error } = await supabase.auth.signUp({
           email, password,
           options: { data: { display_name: displayName || username } },
@@ -881,6 +889,7 @@ function AuthPage({ inviteFrom }) {
             id: data.user.id,
             username: username.toLowerCase().trim(),
             display_name: (displayName || username).trim(),
+            avatar_url: chosenAvatar,
           }, { onConflict: 'id' })
         }
         setMsg({ type: 'success', text: 'Account created! Check your email to confirm, then sign in.' })
@@ -932,16 +941,39 @@ function AuthPage({ inviteFrom }) {
         <form onSubmit={handleSubmit}>
           {mode === 'signup' && <>
             <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', fontSize: 11, color: C.muted, marginBottom: 4, fontFamily: f.sans, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>Display Name</label>
+              <input style={inputStyle} value={displayName}
+                onChange={e => setDisplayName(e.target.value)}
+                placeholder="Your Name" />
+            </div>
+            <div style={{ marginBottom: 14 }}>
               <label style={{ display: 'block', fontSize: 11, color: C.muted, marginBottom: 4, fontFamily: f.sans, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>Username</label>
               <input style={inputStyle} value={username}
                 onChange={e => setUsername(e.target.value.replace(/\s/g, ''))}
                 placeholder="your_username" required />
             </div>
-            <div style={{ marginBottom: 14 }}>
-              <label style={{ display: 'block', fontSize: 11, color: C.muted, marginBottom: 4, fontFamily: f.sans, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>Display Name</label>
-              <input style={inputStyle} value={displayName}
-                onChange={e => setDisplayName(e.target.value)}
-                placeholder="Your Name (optional)" />
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'block', fontSize: 11, color: C.muted, marginBottom: 6, fontFamily: f.sans, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>
+                Pick an Avatar <span style={{ fontWeight: 400, textTransform: 'none' }}>(optional — one will be auto-assigned)</span>
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: 4, marginBottom: 6 }}>
+                {LITERARY_EMOJIS.map(e => (
+                  <button key={e} type="button" onClick={() => setAvatar(avatar === e ? '' : e)}
+                    style={{
+                      fontSize: 18, padding: '5px 3px', border: 'none', cursor: 'pointer',
+                      borderRadius: 6, background: avatar === e ? C.primary : C.surface2,
+                      transition: 'background 0.1s',
+                    }}>{e}</button>
+                ))}
+              </div>
+              {avatar && (
+                <p style={{ margin: 0, fontSize: 11, color: C.muted, fontFamily: f.sans }}>
+                  Selected: {avatar} · <button type="button" onClick={() => setAvatar('')}
+                    style={{ background: 'none', border: 'none', color: C.primary, cursor: 'pointer', fontSize: 11, padding: 0 }}>
+                    Clear
+                  </button>
+                </p>
+              )}
             </div>
           </>}
 
@@ -979,6 +1011,90 @@ function AuthPage({ inviteFrom }) {
           </button>
         </form>
       </div>
+    </div>
+  )
+}
+
+// ================================================================
+// RecoCard – poster with WatchList-style hover quick-add circles
+// ================================================================
+function RecoCard({ book, userId, myBookIds, onAdded }) {
+  const [hovered,  setHovered]  = useState(false)
+  const [adding,   setAdding]   = useState(null)
+  const [added,    setAdded]    = useState(null)
+  const [showRating, setShowRating] = useState(false)
+  const inLibrary = myBookIds?.has(book.id) || !!added
+
+  async function handleAdd(status) {
+    setAdding(status)
+    try {
+      await addToLibrary(userId, book, status)
+      setAdded(status)
+      onAdded?.(book.id)
+      if (status === 'read') setShowRating(true)
+    } catch (e) { alert(e.message) }
+    setAdding(null)
+  }
+
+  async function handleRated(stars) {
+    await supabase.from('user_books')
+      .update({ rating: stars }).eq('user_id', userId).eq('book_id', book.id)
+    setShowRating(false)
+  }
+
+  return (
+    <div style={{ flexShrink: 0, position: 'relative' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}>
+      {showRating && (
+        <RatingPopup title={book.title} onRate={handleRated} onSkip={() => setShowRating(false)} />
+      )}
+      <PosterCard book={book} />
+
+      {/* Hover overlay */}
+      {hovered && (
+        <div style={{
+          position: 'absolute', inset: 0, borderRadius: 8,
+          background: 'rgba(10,8,24,0.72)',
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'flex-end',
+          paddingBottom: 14,
+        }}>
+          {inLibrary ? (
+            <div style={{
+              background: 'rgba(52,211,153,0.15)', borderRadius: 6,
+              padding: '4px 10px', fontSize: 11, color: C.success,
+              fontFamily: f.sans, fontWeight: 700,
+            }}>
+              {STATUS_ICONS[added]} {STATUS_LABELS[added] || 'In library'}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 10 }}>
+              {[
+                ['want_to_read', '🔖', C.accent,     '#0f1117'],
+                ['reading',      '📖', C.primary,    C.white],
+                ['read',         '✅', C.success,    C.white],
+              ].map(([st, icon, bg, fg]) => (
+                <button key={st} onClick={() => handleAdd(st)}
+                  title={STATUS_LABELS[st]}
+                  disabled={!!adding}
+                  style={{
+                    width: 42, height: 42, borderRadius: '50%',
+                    background: bg, border: 'none', cursor: adding ? 'not-allowed' : 'pointer',
+                    fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
+                    opacity: adding && adding !== st ? 0.5 : 1,
+                    transition: 'transform 0.1s, opacity 0.1s',
+                    transform: adding === st ? 'scale(0.9)' : 'scale(1)',
+                    color: fg,
+                  }}>
+                  {adding === st ? '…' : icon}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -1240,6 +1356,32 @@ function HomePage({ userId, setView }) {
             loading={loadingData}
           />
 
+          {authorRecs.length > 0 && (
+            <HorizontalRow
+              title="✍️ From Authors You Follow"
+              items={authorRecs}
+              renderItem={book => (
+                <RecoCard key={book.id} book={book} userId={userId}
+                  myBookIds={myBookIds}
+                  onAdded={id => { setMyBookIds(prev => new Set([...prev, id])); loadHomeData() }} />
+              )}
+              emptyMsg=""
+              loading={false}
+            />
+          )}
+
+          <HorizontalRow
+            title="✨ Suggested for You"
+            items={genreRecs}
+            renderItem={book => (
+              <RecoCard key={book.id} book={book} userId={userId}
+                myBookIds={myBookIds}
+                onAdded={id => { setMyBookIds(prev => new Set([...prev, id])); loadHomeData() }} />
+            )}
+            emptyMsg="Loading recommendations…"
+            loading={loadingData}
+          />
+
           {recentlyRead.length > 0 && (
             <HorizontalRow
               title="✅ Read"
@@ -1253,30 +1395,6 @@ function HomePage({ userId, setView }) {
               seeAllAction={() => setView('mylist')}
             />
           )}
-
-          {authorRecs.length > 0 && (
-            <HorizontalRow
-              title="✍️ From Authors You Follow"
-              items={authorRecs}
-              renderItem={book => (
-                <PosterCard key={book.id} book={book}
-                  onClick={() => setModal({ type: 'search', book })} />
-              )}
-              emptyMsg=""
-              loading={false}
-            />
-          )}
-
-          <HorizontalRow
-            title="✨ Suggested for You"
-            items={genreRecs}
-            renderItem={book => (
-              <PosterCard key={book.id} book={book}
-                onClick={() => setModal({ type: 'search', book })} />
-            )}
-            emptyMsg="Loading recommendations…"
-            loading={loadingData}
-          />
         </>
       )}
 
@@ -2367,7 +2485,16 @@ export default function App() {
   useEffect(() => {
     if (!session?.user) { setProfile(null); return }
     supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle()
-      .then(({ data }) => setProfile(data))
+      .then(async ({ data }) => {
+        // Auto-assign avatar if profile exists but has none
+        if (data && !data.avatar_url) {
+          const av = autoAvatar(session.user.email)
+          await supabase.from('profiles').update({ avatar_url: av }).eq('id', session.user.id)
+          setProfile({ ...data, avatar_url: av })
+        } else {
+          setProfile(data)
+        }
+      })
 
     // Handle invite link — auto-send friend request once
     const inviteFrom = inviteFromRef.current
@@ -2420,7 +2547,7 @@ export default function App() {
         {view === 'profile'  && <ProfilePage  userId={userId} profile={profile}
           onSignOut={() => supabase.auth.signOut()}
           onProfileUpdate={() => supabase.from('profiles').select('*').eq('id', userId).maybeSingle()
-            .then(({ data }) => data && window.location.reload())} />}
+            .then(({ data }) => { if (data) setProfile(data) })} />}
       </main>
     </div>
   )
