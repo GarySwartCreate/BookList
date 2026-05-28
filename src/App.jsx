@@ -1018,7 +1018,7 @@ function AuthPage({ inviteFrom }) {
 // ================================================================
 // RecoCard – poster with WatchList-style hover quick-add circles
 // ================================================================
-function RecoCard({ book, userId, myBookIds, onAdded }) {
+function RecoCard({ book, userId, myBookIds, onAdded, onDismiss }) {
   const [hovered,  setHovered]  = useState(false)
   const [adding,   setAdding]   = useState(null)
   const [added,    setAdded]    = useState(null)
@@ -1034,6 +1034,11 @@ function RecoCard({ book, userId, myBookIds, onAdded }) {
       if (status === 'read') setShowRating(true)
     } catch (e) { alert(e.message) }
     setAdding(null)
+  }
+
+  function handleDismiss() {
+    setAdded('not_for_me')
+    onDismiss?.(book.id)
   }
 
   async function handleRated(stars) {
@@ -1071,17 +1076,20 @@ function RecoCard({ book, userId, myBookIds, onAdded }) {
           ) : (
             <div style={{ display: 'flex', gap: 10 }}>
               {[
-                ['want_to_read', '🔖', C.accent,     '#0f1117'],
-                ['reading',      '📖', C.primary,    C.white],
-                ['read',         '✅', C.success,    C.white],
-              ].map(([st, icon, bg, fg]) => (
-                <button key={st} onClick={() => handleAdd(st)}
-                  title={STATUS_LABELS[st]}
+                { st: 'want_to_read', icon: '🔖', bg: C.accent,   fg: '#0f1117', label: 'Want to Read',  dismiss: false },
+                { st: 'read',         icon: '✅', bg: C.success,  fg: C.white,   label: 'Read',          dismiss: false },
+                { st: 'not_for_me',   icon: '✕',  bg: '#3d1f1f',  fg: '#ff7070', label: 'Not for Me',    dismiss: true  },
+              ].map(({ st, icon, bg, fg, label, dismiss }) => (
+                <button key={st}
+                  onClick={() => dismiss ? handleDismiss() : handleAdd(st)}
+                  title={label}
                   disabled={!!adding}
                   style={{
                     width: 42, height: 42, borderRadius: '50%',
                     background: bg, border: 'none', cursor: adding ? 'not-allowed' : 'pointer',
-                    fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: dismiss ? 16 : 18,
+                    fontWeight: dismiss ? 700 : 'normal',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
                     boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
                     opacity: adding && adding !== st ? 0.5 : 1,
                     transition: 'transform 0.1s, opacity 0.1s',
@@ -1117,6 +1125,7 @@ function HomePage({ userId, setView }) {
   const [recentlyRead, setRecentlyRead] = useState([])
   const [loadingData,  setLoadingData]  = useState(true)
   const [myBookIds,    setMyBookIds]    = useState(new Set())
+  const [dismissedRecs, setDismissedRecs] = useState(new Set())
 
   const [modal,        setModal]        = useState(null)
   const debounceRef = useRef(null)
@@ -1356,14 +1365,15 @@ function HomePage({ userId, setView }) {
             loading={loadingData}
           />
 
-          {authorRecs.length > 0 && (
+          {authorRecs.filter(b => !dismissedRecs.has(b.id)).length > 0 && (
             <HorizontalRow
               title="✍️ From Authors You Follow"
-              items={authorRecs}
+              items={authorRecs.filter(b => !dismissedRecs.has(b.id))}
               renderItem={book => (
                 <RecoCard key={book.id} book={book} userId={userId}
                   myBookIds={myBookIds}
-                  onAdded={id => { setMyBookIds(prev => new Set([...prev, id])); loadHomeData() }} />
+                  onAdded={id => { setMyBookIds(prev => new Set([...prev, id])); loadHomeData() }}
+                  onDismiss={id => setDismissedRecs(prev => new Set([...prev, id]))} />
               )}
               emptyMsg=""
               loading={false}
@@ -1372,11 +1382,12 @@ function HomePage({ userId, setView }) {
 
           <HorizontalRow
             title="✨ Suggested for You"
-            items={genreRecs}
+            items={genreRecs.filter(b => !dismissedRecs.has(b.id))}
             renderItem={book => (
               <RecoCard key={book.id} book={book} userId={userId}
                 myBookIds={myBookIds}
-                onAdded={id => { setMyBookIds(prev => new Set([...prev, id])); loadHomeData() }} />
+                onAdded={id => { setMyBookIds(prev => new Set([...prev, id])); loadHomeData() }}
+                onDismiss={id => setDismissedRecs(prev => new Set([...prev, id]))} />
             )}
             emptyMsg="Loading recommendations…"
             loading={loadingData}
@@ -2236,7 +2247,6 @@ function ProfilePage({ userId, profile, onProfileUpdate, onSignOut }) {
       display_name: displayName.trim(),
       username: username.toLowerCase().trim(),
       avatar_url: avatar || profile?.avatar_url || autoAvatar(''),
-      updated_at: new Date().toISOString(),
     }, { onConflict: 'id' })
     setSaving(false)
     if (error) {
