@@ -1085,9 +1085,9 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss }) {
                   title={label}
                   disabled={!!adding}
                   style={{
-                    width: 42, height: 42, borderRadius: '50%',
+                    width: 32, height: 32, borderRadius: '50%',
                     background: bg, border: 'none', cursor: adding ? 'not-allowed' : 'pointer',
-                    fontSize: dismiss ? 16 : 18,
+                    fontSize: dismiss ? 12 : 14,
                     fontWeight: dismiss ? 700 : 'normal',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
