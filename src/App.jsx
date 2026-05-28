@@ -169,6 +169,14 @@ const STATUS_COLORS = {
   want_to_read: { bg: '#2a1a0a', color: '#f0b429' },
 }
 
+const LITERARY_EMOJIS = [
+  '📚','📖','🔖','✒️','🖋️','📝','📜','🗺️','🏛️','🦉',
+  '🌿','🌙','⭐','🔭','🎭','🧙','🧝','🦁','🐉','🌺',
+  '🍎','🏰','⚔️','👑','🎩','🕵️','🦸','🧚','🌊','🏔️',
+  '🌲','🌹','🎪','☕','🕯️','🌟','🔮','🐺','🦅','🌴',
+  '⚗️','🗡️','🏺','🧪','🎠','🌻','🦋','🐦','🌈','🎶',
+]
+
 function timeAgo(dateStr) {
   const diff = (Date.now() - new Date(dateStr)) / 1000
   if (diff < 60)   return 'just now'
@@ -314,6 +322,73 @@ function PosterCard({ book, userBook, onClick, width = 120, height = 180 }) {
 }
 
 // ================================================================
+// SearchResultCard – poster + quick-add buttons for search
+// ================================================================
+function SearchResultCard({ book, userId, myBookIds, onAdded, onOpenModal }) {
+  const [adding,  setAdding]  = useState(null)
+  const [added,   setAdded]   = useState(null)
+  const [showRatingPopup, setShowRatingPopup] = useState(false)
+  const isInLibrary = myBookIds?.has(book.id)
+
+  async function handleAdd(status) {
+    setAdding(status)
+    try {
+      await addToLibrary(userId, book, status)
+      setAdded(status)
+      onAdded?.(book.id)
+      if (status === 'read') setShowRatingPopup(true)
+    } catch (e) {
+      alert('Could not add book: ' + e.message)
+    }
+    setAdding(null)
+  }
+
+  async function handleRated(stars) {
+    await supabase.from('user_books')
+      .update({ rating: stars, updated_at: new Date().toISOString() })
+      .eq('user_id', userId).eq('book_id', book.id)
+    setShowRatingPopup(false)
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {showRatingPopup && (
+        <RatingPopup title={book.title} onRate={handleRated} onSkip={() => setShowRatingPopup(false)} />
+      )}
+      <PosterCard book={book} onClick={onOpenModal} />
+      {isInLibrary || added ? (
+        <div style={{
+          background: STATUS_COLORS[added || 'read']?.bg || C.surface2,
+          borderRadius: 6, padding: '5px 4px', textAlign: 'center',
+          fontSize: 10, fontFamily: f.sans, fontWeight: 700,
+          color: STATUS_COLORS[added || 'read']?.color || C.success,
+        }}>
+          {STATUS_ICONS[added]} {STATUS_LABELS[added] || 'In Library'}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {Object.entries(STATUS_LABELS).map(([key, lbl]) => (
+            <button key={key} onClick={() => handleAdd(key)} disabled={!!adding}
+              style={{
+                padding: '5px 4px', borderRadius: 5, border: 'none',
+                cursor: adding ? 'not-allowed' : 'pointer',
+                fontFamily: f.sans, fontSize: 11, fontWeight: 700,
+                background: key === 'want_to_read' ? C.accent
+                  : key === 'reading' ? C.primary : C.success,
+                color: key === 'want_to_read' ? '#0f1117' : C.white,
+                opacity: adding && adding !== key ? 0.5 : 1,
+                transition: 'opacity 0.15s',
+              }}>
+              {adding === key ? '…' : `${STATUS_ICONS[key]} ${lbl}`}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ================================================================
 // HorizontalRow – scrollable shelf row
 // ================================================================
 function HorizontalRow({ title, items, renderItem, emptyMsg, loading, seeAllAction }) {
@@ -347,35 +422,111 @@ function HorizontalRow({ title, items, renderItem, emptyMsg, loading, seeAllActi
 }
 
 // ================================================================
+// RatingPopup – appears after marking a book as Read
+// ================================================================
+function RatingPopup({ title, onRate, onSkip }) {
+  const [hovered, setHovered] = useState(0)
+  const [selected, setSelected] = useState(0)
+
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape') onSkip() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onSkip])
+
+  return (
+    <div onClick={(e) => e.target === e.currentTarget && onSkip()}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1100,
+        background: 'rgba(5,4,15,0.88)', backdropFilter: 'blur(6px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+      }}>
+      <div style={{
+        background: C.surface, borderRadius: 14, padding: 32, maxWidth: 360, width: '100%',
+        border: `1px solid ${C.border}`, boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
+        textAlign: 'center',
+      }}>
+        <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
+        <h3 style={{ margin: '0 0 6px', color: C.text, fontFamily: f.serif, fontSize: 20 }}>
+          Finished it!
+        </h3>
+        <p style={{ margin: '0 0 20px', color: C.muted, fontFamily: f.sans, fontSize: 14 }}>
+          How would you rate <em style={{ color: C.text }}>{title}</em>?
+        </p>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginBottom: 20 }}>
+          {[1,2,3,4,5].map(n => (
+            <span key={n}
+              onMouseEnter={() => setHovered(n)}
+              onMouseLeave={() => setHovered(0)}
+              onClick={() => setSelected(n)}
+              style={{
+                fontSize: 36, cursor: 'pointer', userSelect: 'none',
+                color: n <= (hovered || selected) ? C.star : C.border,
+                transition: 'color 0.1s, transform 0.1s',
+                transform: n <= (hovered || selected) ? 'scale(1.15)' : 'scale(1)',
+                display: 'inline-block',
+              }}>★</span>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+          <button onClick={() => selected ? onRate(selected) : onSkip()}
+            style={{ ...btn(selected ? 'accent' : 'subtle'), minWidth: 100 }}>
+            {selected ? `Save ${selected}★` : 'Skip'}
+          </button>
+          {selected > 0 && (
+            <button onClick={onSkip} style={btn('subtle', 'sm')}>Skip</button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
 // BookDetailModal – full info overlay
 // ================================================================
 function BookDetailModal({ item, userId, onClose, onUpdate }) {
-  // item can be a userBook (from library) or a raw book (from search/recs)
   const isLibraryBook = !!item?.user_id
   const book = isLibraryBook ? (item.books || {}) : item
   const userBook = isLibraryBook ? item : null
 
-  const [status,  setStatus]  = useState(userBook?.status || '')
-  const [rating,  setRating]  = useState(userBook?.rating || null)
-  const [notes,   setNotes]   = useState(userBook?.notes || '')
-  const [saving,  setSaving]  = useState(false)
-  const [adding,  setAdding]  = useState(null) // status key being added
-  const [msg,     setMsg]     = useState(null)
+  const [status,       setStatus]       = useState(userBook?.status || '')
+  const [rating,       setRating]       = useState(userBook?.rating || null)
+  const [notes,        setNotes]        = useState(userBook?.notes || '')
+  const [saving,       setSaving]       = useState(false)
+  const [adding,       setAdding]       = useState(null)
+  const [msg,          setMsg]          = useState(null)
+  const [showRating,   setShowRating]   = useState(false)
+  const [following,    setFollowing]    = useState(false)
+  const [isFollowed,   setIsFollowed]   = useState(false)
 
-  // Close on backdrop click or Escape
+  const authors = book?.authors || []
+
   useEffect(() => {
     function onKey(e) { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  // Check if already following first author
+  useEffect(() => {
+    if (!authors[0] || !userId) return
+    supabase.from('author_follows')
+      .select('id').eq('user_id', userId).eq('author', authors[0]).maybeSingle()
+      .then(({ data }) => setIsFollowed(!!data))
+  }, [authors[0], userId])
+
   async function handleAddToLibrary(st) {
     setAdding(st)
     try {
       await addToLibrary(userId, book, st)
-      setMsg({ type: 'success', text: `Added to ${STATUS_LABELS[st]}!` })
-      onUpdate?.()
-      setTimeout(onClose, 900)
+      if (st === 'read') {
+        setShowRating(true)
+      } else {
+        setMsg({ type: 'success', text: `Added to ${STATUS_LABELS[st]}!` })
+        onUpdate?.()
+        setTimeout(onClose, 900)
+      }
     } catch (e) {
       setMsg({ type: 'error', text: e.message })
     }
@@ -385,13 +536,43 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
   async function handleSave() {
     if (!userBook) return
     setSaving(true)
+    const wasNotRead = userBook.status !== 'read' && status === 'read'
     await supabase.from('user_books')
       .update({ status, rating, notes, updated_at: new Date().toISOString() })
       .eq('id', userBook.id)
-    onUpdate?.()
     setSaving(false)
-    setMsg({ type: 'success', text: 'Saved!' })
-    setTimeout(() => setMsg(null), 2000)
+    if (wasNotRead && !rating) {
+      setShowRating(true)
+    } else {
+      onUpdate?.()
+      setMsg({ type: 'success', text: 'Saved!' })
+      setTimeout(() => setMsg(null), 2000)
+    }
+  }
+
+  async function handleRated(stars) {
+    // Save rating then close
+    const target = userBook
+      ? supabase.from('user_books').update({ rating: stars, updated_at: new Date().toISOString() }).eq('id', userBook.id)
+      : supabase.from('user_books').update({ rating: stars, updated_at: new Date().toISOString() })
+          .eq('user_id', userId).eq('book_id', book.id)
+    await target
+    setShowRating(false)
+    onUpdate?.()
+    onClose()
+  }
+
+  async function toggleFollow() {
+    if (!authors[0]) return
+    setFollowing(true)
+    if (isFollowed) {
+      await supabase.from('author_follows').delete().eq('user_id', userId).eq('author', authors[0])
+      setIsFollowed(false)
+    } else {
+      await supabase.from('author_follows').insert({ user_id: userId, author: authors[0] })
+      setIsFollowed(true)
+    }
+    setFollowing(false)
   }
 
   async function handleRemove() {
@@ -408,6 +589,14 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
   const isDirty = statusChanged || ratingChanged || notesChanged
 
   return (
+    <>
+    {showRating && (
+      <RatingPopup
+        title={book?.title}
+        onRate={handleRated}
+        onSkip={() => { setShowRating(false); onUpdate?.(); onClose() }}
+      />
+    )}
     <div
       onClick={(e) => e.target === e.currentTarget && onClose()}
       style={{
@@ -449,10 +638,18 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
               fontWeight: 700, lineHeight: 1.2 }}>
               {book.title}
             </h2>
-            <p style={{ margin: '0 0 6px', color: C.muted, fontFamily: f.sans, fontSize: 14 }}>
-              {book.authors?.join(', ')}
-              {book.published_date && ` · ${book.published_date.slice(0,4)}`}
-            </p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
+              <p style={{ margin: 0, color: C.muted, fontFamily: f.sans, fontSize: 14 }}>
+                {book.authors?.join(', ')}
+                {book.published_date && ` · ${book.published_date.slice(0,4)}`}
+              </p>
+              {authors[0] && (
+                <button onClick={toggleFollow} disabled={following}
+                  style={{ ...btn(isFollowed ? 'subtle' : 'ghost', 'sm'), fontSize: 11, padding: '3px 9px' }}>
+                  {following ? '…' : isFollowed ? '✓ Following' : '+ Follow Author'}
+                </button>
+              )}
+            </div>
             {book.categories?.length > 0 && (
               <p style={{ margin: '0 0 10px', fontSize: 12, color: C.primary, fontFamily: f.sans }}>
                 {book.categories.slice(0,3).join(' · ')}
@@ -546,6 +743,7 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
         )}
       </div>
     </div>
+    </>
   )
 }
 
@@ -697,6 +895,8 @@ function HomePage({ userId, setView }) {
   const [friendBooks,  setFriendBooks]  = useState([])
   const [friendProfiles, setFriendProfiles] = useState({})
   const [genreRecs,    setGenreRecs]    = useState([])
+  const [authorRecs,   setAuthorRecs]   = useState([])
+  const [recentlyRead, setRecentlyRead] = useState([])
   const [loadingData,  setLoadingData]  = useState(true)
   const [myBookIds,    setMyBookIds]    = useState(new Set())
 
@@ -742,6 +942,21 @@ function HomePage({ userId, setView }) {
         } catch (_) { /* genre recs are optional */ }
       }
     }
+
+    // Recently read
+    setRecentlyRead(lib.filter(u => u.status === 'read').slice(0, 12))
+
+    // Author follows
+    try {
+      const { data: follows } = await supabase.from('author_follows')
+        .select('author').eq('user_id', userId)
+      if (follows?.length > 0) {
+        const author = follows[Math.floor(Math.random() * follows.length)].author
+        const { results } = await searchBooks(`inauthor:"${author}"`, 10)
+        setAuthorRecs(results.filter(b => !ids.has(b.id)).slice(0, 8)
+          .map(b => ({ ...b, reason: `More by ${author}` })))
+      }
+    } catch (_) { /* optional */ }
 
     setLoadingData(false)
   }, [userId])
@@ -835,8 +1050,10 @@ function HomePage({ userId, setView }) {
                 gap: 16,
               }}>
                 {searchRes.map(book => (
-                  <PosterCard key={book.id} book={book}
-                    onClick={() => setModal({ type: 'search', book })} />
+                  <SearchResultCard key={book.id} book={book} userId={userId}
+                    myBookIds={myBookIds}
+                    onAdded={(id) => setMyBookIds(prev => new Set([...prev, id]))}
+                    onOpenModal={() => setModal({ type: 'search', book })} />
                 ))}
               </div>
             )
@@ -918,6 +1135,33 @@ function HomePage({ userId, setView }) {
             emptyMsg="Your friends haven't rated books yet"
             loading={loadingData}
           />
+
+          {recentlyRead.length > 0 && (
+            <HorizontalRow
+              title="✅ Recently Read"
+              items={recentlyRead}
+              renderItem={ub => (
+                <PosterCard key={ub.id} userBook={ub}
+                  onClick={() => setModal({ type: 'library', userBook: ub })} />
+              )}
+              emptyMsg=""
+              loading={false}
+              seeAllAction={() => setView('mylist')}
+            />
+          )}
+
+          {authorRecs.length > 0 && (
+            <HorizontalRow
+              title="✍️ From Authors You Follow"
+              items={authorRecs}
+              renderItem={book => (
+                <PosterCard key={book.id} book={book}
+                  onClick={() => setModal({ type: 'search', book })} />
+              )}
+              emptyMsg=""
+              loading={false}
+            />
+          )}
 
           {genreRecs.length > 0 && (
             <HorizontalRow
@@ -1450,6 +1694,193 @@ function ActivityPage({ userId }) {
 }
 
 // ================================================================
+// Profile page – avatar, stats, username, top 10
+// ================================================================
+function ProfilePage({ userId, profile, onProfileUpdate }) {
+  const [displayName, setDisplayName] = useState(profile?.display_name || '')
+  const [username,    setUsername]    = useState(profile?.username || '')
+  const [avatar,      setAvatar]      = useState(profile?.avatar_url || '')
+  const [saving,      setSaving]      = useState(false)
+  const [msg,         setMsg]         = useState(null)
+  const [stats,       setStats]       = useState(null)
+  const [topBooks,    setTopBooks]    = useState([])
+  const [follows,     setFollows]     = useState([])
+  const [modal,       setModal]       = useState(null)
+
+  useEffect(() => {
+    // Load stats
+    supabase.from('user_books').select('status, rating, books(*)').eq('user_id', userId)
+      .then(({ data }) => {
+        if (!data) return
+        setStats({
+          total:       data.length,
+          read:        data.filter(u => u.status === 'read').length,
+          reading:     data.filter(u => u.status === 'reading').length,
+          wantToRead:  data.filter(u => u.status === 'want_to_read').length,
+        })
+        const top = data.filter(u => (u.rating || 0) >= 4 && u.status === 'read')
+          .sort((a, b) => (b.rating - a.rating))
+          .slice(0, 10)
+        setTopBooks(top)
+      })
+    // Load author follows
+    supabase.from('author_follows').select('author').eq('user_id', userId)
+      .then(({ data }) => setFollows(data || []))
+  }, [userId])
+
+  async function saveProfile() {
+    if (!username.trim()) { setMsg({ type: 'error', text: 'Username is required.' }); return }
+    setSaving(true)
+    const { error } = await supabase.from('profiles').update({
+      display_name: displayName.trim(),
+      username: username.toLowerCase().trim(),
+      avatar_url: avatar,
+    }).eq('id', userId)
+    setSaving(false)
+    if (error) {
+      setMsg({ type: 'error', text: error.message })
+    } else {
+      setMsg({ type: 'success', text: 'Profile saved!' })
+      onProfileUpdate?.()
+      setTimeout(() => setMsg(null), 2500)
+    }
+  }
+
+  async function unfollowAuthor(author) {
+    await supabase.from('author_follows').delete().eq('user_id', userId).eq('author', author)
+    setFollows(prev => prev.filter(f => f.author !== author))
+  }
+
+  const sectionLabel = (text) => (
+    <p style={{ margin: '0 0 10px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+      textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>{text}</p>
+  )
+  const cardStyle = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20, marginBottom: 20 }
+
+  return (
+    <div style={{ maxWidth: 600 }}>
+      {/* Avatar + account */}
+      <div style={cardStyle}>
+        {sectionLabel('Account')}
+        <p style={{ margin: '0 0 16px', color: C.muted, fontFamily: f.sans, fontSize: 13 }}>
+          Signed in with your email
+        </p>
+
+        {sectionLabel('Profile Avatar')}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 14, padding: '10px 14px',
+          background: C.surface2, borderRadius: 8, marginBottom: 12,
+        }}>
+          <span style={{ fontSize: 40 }}>{avatar || '📚'}</span>
+          <span style={{ color: C.muted, fontFamily: f.sans, fontSize: 13 }}>
+            Tap an icon below to change · tap again to clear
+          </span>
+        </div>
+        <div style={{
+          display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: 6, marginBottom: 20,
+        }}>
+          {LITERARY_EMOJIS.map(e => (
+            <button key={e} onClick={() => setAvatar(avatar === e ? '' : e)}
+              style={{
+                fontSize: 22, padding: '6px 4px', border: 'none', cursor: 'pointer',
+                borderRadius: 8, background: avatar === e ? C.primary : C.surface2,
+                transition: 'background 0.15s',
+              }}>{e}</button>
+          ))}
+        </div>
+
+        {sectionLabel('Display Name')}
+        <input style={{ ...inputStyle, marginBottom: 12 }}
+          value={displayName} onChange={e => setDisplayName(e.target.value)}
+          placeholder="Your Name" />
+
+        {sectionLabel('Username')}
+        <input style={{ ...inputStyle, marginBottom: 20 }}
+          value={username} onChange={e => setUsername(e.target.value.replace(/\s/g, '').toLowerCase())}
+          placeholder="your_username" />
+
+        {msg && (
+          <p style={{ margin: '0 0 12px', fontSize: 13, fontFamily: f.sans,
+            color: msg.type === 'success' ? C.success : C.danger }}>
+            {msg.text}
+          </p>
+        )}
+        <button onClick={saveProfile} disabled={saving} style={btn('primary')}>
+          {saving ? 'Saving…' : 'Save Profile'}
+        </button>
+      </div>
+
+      {/* Reading stats */}
+      {stats && (
+        <div style={cardStyle}>
+          {sectionLabel('Reading Stats')}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+            {[
+              ['📚', 'Total', stats.total],
+              ['✅', 'Read', stats.read],
+              ['📖', 'Reading', stats.reading],
+              ['🔖', 'Want', stats.wantToRead],
+            ].map(([icon, lbl, n]) => (
+              <div key={lbl} style={{
+                background: C.surface2, borderRadius: 8, padding: '12px 8px', textAlign: 'center',
+              }}>
+                <div style={{ fontSize: 22, marginBottom: 4 }}>{icon}</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: C.text, fontFamily: f.sans }}>{n}</div>
+                <div style={{ fontSize: 11, color: C.muted, fontFamily: f.sans }}>{lbl}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Top 10 favorites */}
+      {topBooks.length > 0 && (
+        <div style={cardStyle}>
+          {sectionLabel(`⭐ My Top ${topBooks.length} Books`)}
+          <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 8, scrollbarWidth: 'none' }}>
+            {topBooks.map(ub => (
+              <div key={ub.id} style={{ flexShrink: 0 }}>
+                <PosterCard userBook={ub} onClick={() => setModal(ub)} width={90} height={135} />
+                <div style={{ display: 'flex', justifyContent: 'center', marginTop: 4 }}>
+                  <StarRating value={ub.rating} readonly size={11} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Author follows */}
+      {follows.length > 0 && (
+        <div style={cardStyle}>
+          {sectionLabel('Authors You Follow')}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {follows.map(f => (
+              <div key={f.author} style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                background: C.surface2, borderRadius: 20, padding: '5px 12px',
+              }}>
+                <span style={{ color: C.text, fontFamily: f.sans, fontSize: 13 }}>{f.author}</span>
+                <button onClick={() => unfollowAuthor(f.author)} style={{
+                  background: 'none', border: 'none', color: C.muted,
+                  cursor: 'pointer', fontSize: 14, padding: 0, lineHeight: 1,
+                }}>×</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {modal && (
+        <BookDetailModal item={modal} userId={userId}
+          onClose={() => setModal(null)}
+          onUpdate={() => setModal(null)} />
+      )}
+    </div>
+  )
+}
+
+// ================================================================
 // Nav
 // ================================================================
 function Nav({ view, setView, profile, onSignOut }) {
@@ -1458,6 +1889,7 @@ function Nav({ view, setView, profile, onSignOut }) {
     ['mylist',  '📚', 'My List'],
     ['friends', '👥', 'Friends'],
     ['activity','📡', 'Activity'],
+    ['profile', profile?.avatar_url || '👤', 'Profile'],
   ]
   return (
     <nav style={{
@@ -1583,6 +2015,9 @@ export default function App() {
         {view === 'mylist'   && <MyListPage   userId={userId} />}
         {view === 'friends'  && <FriendsPage  userId={userId} />}
         {view === 'activity' && <ActivityPage userId={userId} />}
+        {view === 'profile'  && <ProfilePage  userId={userId} profile={profile}
+          onProfileUpdate={() => supabase.from('profiles').select('*').eq('id', userId).maybeSingle()
+            .then(({ data }) => data && window.location.reload())} />}
       </main>
     </div>
   )
