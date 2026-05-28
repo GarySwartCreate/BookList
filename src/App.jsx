@@ -2231,16 +2231,18 @@ function ProfilePage({ userId, profile, onProfileUpdate, onSignOut }) {
   async function saveProfile() {
     if (!username.trim()) { setMsg({ type: 'error', text: 'Username is required.' }); return }
     setSaving(true)
-    const { error } = await supabase.from('profiles').update({
+    const { error } = await supabase.from('profiles').upsert({
+      id: userId,
       display_name: displayName.trim(),
       username: username.toLowerCase().trim(),
-      avatar_url: avatar,
-    }).eq('id', userId)
+      avatar_url: avatar || profile?.avatar_url || autoAvatar(''),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'id' })
     setSaving(false)
     if (error) {
-      setMsg({ type: 'error', text: error.message })
+      setMsg({ type: 'error', text: `Save failed: ${error.message}` })
     } else {
-      setMsg({ type: 'success', text: 'Profile saved!' })
+      setMsg({ type: 'success', text: 'Profile saved! ✓' })
       onProfileUpdate?.()
       setTimeout(() => setMsg(null), 2500)
     }
@@ -2486,11 +2488,16 @@ export default function App() {
     if (!session?.user) { setProfile(null); return }
     supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle()
       .then(async ({ data }) => {
-        // Auto-assign avatar if profile exists but has none
-        if (data && !data.avatar_url) {
-          const av = autoAvatar(session.user.email)
-          await supabase.from('profiles').update({ avatar_url: av }).eq('id', session.user.id)
-          setProfile({ ...data, avatar_url: av })
+        const av = autoAvatar(session.user.email)
+        if (!data || !data.avatar_url) {
+          // Upsert ensures row exists and gets an avatar
+          const { data: upserted } = await supabase.from('profiles').upsert({
+            id: session.user.id,
+            avatar_url: data?.avatar_url || av,
+            display_name: data?.display_name || '',
+            username: data?.username || '',
+          }, { onConflict: 'id' }).select().maybeSingle()
+          setProfile(upserted || { ...data, avatar_url: av, id: session.user.id })
         } else {
           setProfile(data)
         }
