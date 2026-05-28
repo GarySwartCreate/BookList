@@ -1339,7 +1339,7 @@ function MyListPage({ userId }) {
 
   const baseFiltered = filter === 'all' ? userBooks : userBooks.filter(u => u.status === filter)
   const q = searchQ.toLowerCase().trim()
-  const visible = q
+  const matched = q
     ? baseFiltered.filter(u => {
         const title   = (u.books?.title || '').toLowerCase()
         const authors = (u.books?.authors || []).join(' ').toLowerCase()
@@ -1347,6 +1347,11 @@ function MyListPage({ userId }) {
       })
     : baseFiltered
   const isQueue = filter === 'want_to_read' && !q
+  // Sort: Top 10 first, then by rating desc — except in drag-reorder queue mode
+  const visible = isQueue ? matched : [...matched].sort((a, b) => {
+    if (!!b.top_10 !== !!a.top_10) return b.top_10 ? 1 : -1
+    return (b.rating || 0) - (a.rating || 0)
+  })
 
   // Drag for want_to_read queue
   function onDragStart(e, idx) { setDragIdx(idx); e.dataTransfer.effectAllowed = 'move' }
@@ -1499,9 +1504,14 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
   }
   const q = searchQ.toLowerCase()
   const baseFiltered = filter === 'all' ? books : books.filter(u => u.status === filter)
-  const visible = q
+  const matched = q
     ? baseFiltered.filter(u => (u.books?.title||'').toLowerCase().includes(q) || (u.books?.authors||[]).join(' ').toLowerCase().includes(q))
     : baseFiltered
+  // Sort: Top 10 first, then by rating desc
+  const visible = [...matched].sort((a, b) => {
+    if (!!b.top_10 !== !!a.top_10) return b.top_10 ? 1 : -1
+    return (b.rating || 0) - (a.rating || 0)
+  })
 
   return (
     <div>
