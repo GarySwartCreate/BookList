@@ -46,6 +46,16 @@ img { display: block; max-width: 100%; }
 select, textarea, input {
   font-family: "Helvetica Neue", Arial, sans-serif;
   color: #f1f0ff;
+  /* Prevent iOS Safari from zooming in on input focus */
+  font-size: max(16px, 1em);
+}
+
+/* Mobile improvements */
+@media (max-width: 640px) {
+  /* Prevent double-tap zoom on buttons */
+  button { touch-action: manipulation; }
+  /* Ensure tap areas are large enough */
+  button, [role="button"] { min-height: 36px; }
 }
 
 /* Remove autofill yellow */

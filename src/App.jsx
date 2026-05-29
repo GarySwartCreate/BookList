@@ -191,12 +191,28 @@ const STATUS_COLORS = {
 }
 
 const LITERARY_EMOJIS = [
-  '📚','📖','🔖','✒️','🖋️','📝','📜','🗺️','🏛️','🦉',
-  '🌿','🌙','⭐','🔭','🎭','🧙','🧝','🦁','🐉','🌺',
-  '🍎','🏰','⚔️','👑','🎩','🕵️','🦸','🧚','🌊','🏔️',
-  '🌲','🌹','🎪','☕','🕯️','🌟','🔮','🐺','🦅','🌴',
-  '⚗️','🗡️','🏺','🧪','🎠','🌻','🦋','🐦','🌈','🎶',
+  // Literary / book themed
+  '📚','📖','🔖','✒️','🖋️','✏️','📝','📜','🗺️','🧭',
+  '🏛️','🦉','🔍','💌','🕯️','☕','👑','🏰','🐉','🧙',
+  '🌙','🌿','⭐','🔭','🎭','🧝','🦁','🌺','🍎','⚔️',
+  '🎩','🕵️','🦸','🧚','🌊','🏔️','🌲','🌹','🎪','🌟',
+  '🔮','🐺','🦅','🌴','⚗️','🗡️','🏺','🧪','🎠','🌻',
+  '🦋','🐦','🌈','🎶','🌸','🍊','🍏',
+  // Fun / pop culture
+  '⚖️','🪭','🇺🇸','🔪','💵','💰','🎞️','📼','💿',
+  '🤡','🧉','👏','🤣','😍','😯','😘','👍',
 ]
+
+// Responsive breakpoint hook
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 640)
+  useEffect(() => {
+    const fn = () => setIsMobile(window.innerWidth < 640)
+    window.addEventListener('resize', fn)
+    return () => window.removeEventListener('resize', fn)
+  }, [])
+  return isMobile
+}
 
 function timeAgo(dateStr) {
   const diff = (Date.now() - new Date(dateStr)) / 1000
@@ -277,15 +293,33 @@ function EmptyState({ icon = '📚', message, sub }) {
 // ================================================================
 function PosterCard({ book, userBook, onClick, width = 120, height = 180 }) {
   const [hovered, setHovered] = useState(false)
+  const touchStartRef = useRef(null)
   const cover = book?.cover_url || userBook?.books?.cover_url || null
   const title = book?.title || userBook?.books?.title || ''
   const authors = book?.authors || userBook?.books?.authors || []
   const rating = userBook?.rating
   const status = userBook?.status
 
+  // iOS Safari: track touch position to distinguish tap vs scroll
+  function onTouchStart(e) {
+    touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
+  }
+  function onTouchEnd(e) {
+    if (!touchStartRef.current) return
+    const dx = Math.abs(e.changedTouches[0].clientX - touchStartRef.current.x)
+    const dy = Math.abs(e.changedTouches[0].clientY - touchStartRef.current.y)
+    if (dx < 10 && dy < 10) { e.preventDefault(); onClick?.() }
+    touchStartRef.current = null
+  }
+
   return (
     <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
+      onKeyDown={e => e.key === 'Enter' && onClick?.()}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -293,6 +327,8 @@ function PosterCard({ book, userBook, onClick, width = 120, height = 180 }) {
         transform: hovered ? 'scale(1.04)' : 'scale(1)',
         transition: 'transform 0.18s ease',
         boxShadow: hovered ? '0 8px 32px rgba(0,0,0,0.5)' : '0 2px 10px rgba(0,0,0,0.3)',
+        WebkitTapHighlightColor: 'transparent',
+        userSelect: 'none',
       }}
     >
       {cover
@@ -507,6 +543,7 @@ function RatingPopup({ title, onRate, onSkip }) {
 // BookDetailModal – full info overlay
 // ================================================================
 function BookDetailModal({ item, userId, onClose, onUpdate }) {
+  const isMobile = useIsMobile()
   const isLibraryBook = !!item?.user_id
   const book = isLibraryBook ? (item.books || {}) : item
   const userBook = isLibraryBook ? item : null
@@ -727,13 +764,20 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
       style={{
         position: 'fixed', inset: 0, zIndex: 1000,
         background: 'rgba(5,4,15,0.92)', backdropFilter: 'blur(6px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 20,
+        display: 'flex',
+        alignItems: isMobile ? 'flex-end' : 'center',
+        justifyContent: 'center',
+        padding: isMobile ? 0 : 20,
       }}
     >
       <div style={{
-        background: C.surface, borderRadius: 14, padding: 28,
-        maxWidth: 640, width: '100%', maxHeight: '88vh', overflowY: 'auto',
+        background: C.surface,
+        borderRadius: isMobile ? '16px 16px 0 0' : 14,
+        padding: isMobile ? '20px 16px 32px' : 28,
+        maxWidth: isMobile ? '100%' : 640,
+        width: '100%',
+        maxHeight: isMobile ? '90vh' : '88vh',
+        overflowY: 'auto',
         border: `1px solid ${C.border}`,
         boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
         position: 'relative',
@@ -746,14 +790,21 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
           fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>×</button>
 
-        <div style={{ display: 'flex', gap: 20, marginBottom: 22 }}>
+        <div style={{
+          display: 'flex', flexDirection: isMobile ? 'row' : 'row',
+          gap: isMobile ? 14 : 20, marginBottom: 22,
+        }}>
           {/* Cover */}
           <div style={{ flexShrink: 0 }}>
             {book.cover_url
               ? <img src={book.cover_url} alt={book.title}
-                  style={{ width: 110, height: 165, objectFit: 'cover', borderRadius: 8,
-                    boxShadow: '0 4px 20px rgba(0,0,0,0.4)' }} />
-              : <NoCover title={book.title} width={110} height={165} />
+                  style={{
+                    width: isMobile ? 80 : 110,
+                    height: isMobile ? 120 : 165,
+                    objectFit: 'cover', borderRadius: 8,
+                    boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+                  }} />
+              : <NoCover title={book.title} width={isMobile ? 80 : 110} height={isMobile ? 120 : 165} />
             }
           </div>
 
@@ -943,9 +994,10 @@ function AuthPage({ inviteFrom }) {
       display: 'flex', alignItems: 'center', justifyContent: 'center',
     }}>
       <div style={{
-        width: 380, background: C.surface, borderRadius: 14,
-        padding: 36, border: `1px solid ${C.border}`,
+        width: '100%', maxWidth: 380, background: C.surface, borderRadius: 14,
+        padding: 'clamp(20px, 5vw, 36px)', border: `1px solid ${C.border}`,
         boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+        margin: '0 12px',
       }}>
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
           <div style={{ fontSize: 48, marginBottom: 8 }}>📚</div>
@@ -981,13 +1033,13 @@ function AuthPage({ inviteFrom }) {
               <label style={{ display: 'block', fontSize: 11, color: C.muted, marginBottom: 6, fontFamily: f.sans, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>
                 Pick an Avatar <span style={{ fontWeight: 400, textTransform: 'none' }}>(optional — one will be auto-assigned)</span>
               </label>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: 4, marginBottom: 6 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(34px, 1fr))', gap: 4, marginBottom: 6 }}>
                 {LITERARY_EMOJIS.map(e => (
                   <button key={e} type="button" onClick={() => setAvatar(avatar === e ? '' : e)}
                     style={{
                       fontSize: 18, padding: '5px 3px', border: 'none', cursor: 'pointer',
                       borderRadius: 6, background: avatar === e ? C.primary : C.surface2,
-                      transition: 'background 0.1s',
+                      transition: 'background 0.1s', WebkitTapHighlightColor: 'transparent',
                     }}>{e}</button>
                 ))}
               </div>
@@ -2323,14 +2375,14 @@ function ProfilePage({ userId, profile, onProfileUpdate, onSignOut }) {
           </span>
         </div>
         <div style={{
-          display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: 6, marginBottom: 20,
+          display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(38px, 1fr))', gap: 6, marginBottom: 20,
         }}>
           {LITERARY_EMOJIS.map(e => (
             <button key={e} onClick={() => setAvatar(avatar === e ? '' : e)}
               style={{
                 fontSize: 22, padding: '6px 4px', border: 'none', cursor: 'pointer',
                 borderRadius: 8, background: avatar === e ? C.primary : C.surface2,
-                transition: 'background 0.15s',
+                transition: 'background 0.15s', WebkitTapHighlightColor: 'transparent',
               }}>{e}</button>
           ))}
         </div>
@@ -2430,6 +2482,7 @@ function ProfilePage({ userId, profile, onProfileUpdate, onSignOut }) {
 // Nav
 // ================================================================
 function Nav({ view, setView, profile, theme, toggleTheme }) {
+  const isMobile = useIsMobile()
   const tabs = [
     ['home',    '🏠', 'Home'],
     ['mylist',  '📚', 'My List'],
@@ -2443,28 +2496,31 @@ function Nav({ view, setView, profile, theme, toggleTheme }) {
       position: 'sticky', top: 0, zIndex: 100,
     }}>
       <div style={{
-        maxWidth: 960, margin: '0 auto', padding: '0 20px',
-        display: 'flex', alignItems: 'center', height: 56,
+        maxWidth: 960, margin: '0 auto', padding: isMobile ? '0 10px' : '0 20px',
+        display: 'flex', alignItems: 'center', height: 52,
       }}>
         {/* Logo */}
         <div style={{
-          fontFamily: f.serif, fontWeight: 700, fontSize: 18,
-          color: C.text, marginRight: 28, letterSpacing: '-0.01em', flexShrink: 0,
+          fontFamily: f.serif, fontWeight: 700, fontSize: isMobile ? 16 : 18,
+          color: C.text, marginRight: isMobile ? 8 : 28, letterSpacing: '-0.01em', flexShrink: 0,
         }}>
-          📚 BookList
+          {isMobile ? '📚' : '📚 BookList'}
         </div>
 
         {/* Tabs */}
-        <div style={{ display: 'flex', flex: 1, gap: 2 }}>
+        <div style={{ display: 'flex', flex: 1, gap: isMobile ? 0 : 2 }}>
           {tabs.map(([key, icon, lbl]) => (
             <button key={key} onClick={() => setView(key)} style={{
-              padding: '8px 14px', border: 'none', cursor: 'pointer',
+              padding: isMobile ? '8px 10px' : '8px 14px',
+              border: 'none', cursor: 'pointer',
               background: 'none', fontFamily: f.sans, fontSize: 13, fontWeight: 600,
               color: view === key ? C.primary : C.muted,
               borderBottom: view === key ? `2px solid ${C.primary}` : '2px solid transparent',
-              transition: 'color 0.15s', display: 'flex', alignItems: 'center', gap: 5,
+              transition: 'color 0.15s', display: 'flex', alignItems: 'center', gap: 4,
+              WebkitTapHighlightColor: 'transparent',
             }}>
-              {icon} {lbl}
+              <span style={{ fontSize: isMobile ? 18 : 14 }}>{icon}</span>
+              {!isMobile && lbl}
             </button>
           ))}
         </div>
@@ -2475,20 +2531,20 @@ function Nav({ view, setView, profile, theme, toggleTheme }) {
             background: C.surface2, border: `1px solid ${C.border}`,
             borderRadius: 20, cursor: 'pointer', fontSize: 16,
             width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            flexShrink: 0, marginRight: 12, transition: 'background 0.2s',
+            flexShrink: 0, marginRight: isMobile ? 6 : 12, transition: 'background 0.2s',
+            WebkitTapHighlightColor: 'transparent',
           }}>
           {theme === 'dark' ? '☀️' : '🌙'}
         </button>
 
-        {/* Profile chip — circular avatar + name, like WatchList */}
+        {/* Profile chip */}
         <button onClick={() => setView('profile')} style={{
           display: 'flex', alignItems: 'center', gap: 9,
           background: 'none', border: 'none', cursor: 'pointer',
           padding: '4px 6px', borderRadius: 24, flexShrink: 0,
           outline: view === 'profile' ? `2px solid ${C.primary}` : 'none',
-          transition: 'outline 0.15s',
+          transition: 'outline 0.15s', WebkitTapHighlightColor: 'transparent',
         }}>
-          {/* Circular avatar */}
           <div style={{
             width: 34, height: 34, borderRadius: '50%',
             background: `linear-gradient(135deg, ${C.primaryDim}, ${C.surface2})`,
@@ -2498,7 +2554,7 @@ function Nav({ view, setView, profile, theme, toggleTheme }) {
           }}>
             {avatarEmoji}
           </div>
-          {profile && (
+          {profile && !isMobile && (
             <span style={{
               fontSize: 14, fontFamily: f.sans, fontWeight: 600,
               color: view === 'profile' ? C.text : C.muted,
@@ -2599,10 +2655,12 @@ export default function App() {
 
   const userId = session.user.id
 
+  const isMobile = useIsMobile()
+
   return (
     <div style={{ minHeight: '100vh', background: C.bg }}>
       <Nav view={view} setView={setView} profile={profile} theme={theme} toggleTheme={toggleTheme} />
-      <main style={{ maxWidth: 960, margin: '0 auto', padding: '32px 20px 80px' }}>
+      <main style={{ maxWidth: 960, margin: '0 auto', padding: isMobile ? '20px 12px 60px' : '32px 20px 80px' }}>
         {view === 'home'     && <HomePage     userId={userId} setView={setView} />}
         {view === 'mylist'   && <MyListPage   userId={userId} />}
         {view === 'friends'  && <FriendsPage  userId={userId} />}
