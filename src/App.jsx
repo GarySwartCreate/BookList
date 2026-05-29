@@ -2573,6 +2573,7 @@ function Nav({ view, setView, profile, theme, toggleTheme }) {
 // Root App
 // ================================================================
 export default function App() {
+  const isMobile = useIsMobile()
   const [session, setSession] = useState(undefined)
   const [profile, setProfile] = useState(null)
   const [view,    setView]    = useState('home')
@@ -2654,8 +2655,6 @@ export default function App() {
   if (!session) return <AuthPage inviteFrom={inviteFromRef.current} />
 
   const userId = session.user.id
-
-  const isMobile = useIsMobile()
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg }}>
