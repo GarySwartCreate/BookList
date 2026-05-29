@@ -695,7 +695,6 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
 
   async function handleRemove() {
     if (!userBook) return
-    if (!confirm('Remove from your library?')) return
     await supabase.from('user_books').delete().eq('id', userBook.id)
     onUpdate?.()
     onClose()
