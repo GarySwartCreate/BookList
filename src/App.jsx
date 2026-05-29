@@ -1529,6 +1529,13 @@ function MyListPage({ userId }) {
       .order('created_at', { ascending: false })
     setUserBooks(data || [])
     setLoading(false)
+    // Silently backfill missing covers then refresh
+    const hasMissing = (data || []).some(u => !u.books?.cover_url)
+    if (hasMissing) {
+      fetchMissingCovers(userId).then(fixed => {
+        if (fixed > 0) fetchBooks()
+      })
+    }
   }, [userId])
 
   useEffect(() => { fetchBooks() }, [fetchBooks])
@@ -2585,16 +2592,19 @@ function mapImportRow(row, fmt, defaultStatus = 'read') {
   return null
 }
 
-// Fetch Google Books metadata (ISBN first, then title search)
+// Fetch book metadata — Google Books first, Open Library as fallback
 async function fetchBookMeta(item) {
-  const query = item.isbn ? `isbn:${item.isbn}` : `intitle:"${item.title}"${item.author ? `+inauthor:"${item.author}"` : ''}`
+  const query = item.isbn
+    ? `isbn:${item.isbn}`
+    : `${item.title}${item.author ? ' ' + item.author : ''}`
   try {
-    const results = await searchGoogleBooks(query, 1)
+    const { results } = await searchBooks(query, 1)
     if (results.length > 0) return results[0]
   } catch (_) {}
-  // Fallback: construct minimal book object with a synthetic ID
+  // Last resort: minimal record with a stable hash-based ID
+  const hash = [...(item.title + item.author)].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 0)
   return {
-    id:             `import_${btoa(item.title + item.author).replace(/[^a-z0-9]/gi, '').slice(0, 20)}`,
+    id:             `import_${hash}`,
     title:          item.title,
     authors:        item.author ? [item.author] : [],
     description:    '',
@@ -2604,6 +2614,29 @@ async function fetchBookMeta(item) {
     page_count:     null,
     isbn:           item.isbn,
   }
+}
+
+// Fetch covers for books already in DB that are missing cover_url
+async function fetchMissingCovers(userId, onProgress) {
+  const { data: missing } = await supabase
+    .from('user_books').select('book_id, books(id, title, authors, cover_url)')
+    .eq('user_id', userId)
+    .is('books.cover_url', null)
+  if (!missing?.length) return 0
+  let fixed = 0
+  await pLimit(missing, async (ub) => {
+    const b = ub.books
+    if (!b || b.cover_url) return
+    try {
+      const { results } = await searchBooks(`${b.title} ${(b.authors||[]).join(' ')}`, 1)
+      if (results[0]?.cover_url) {
+        await supabase.from('books').update({ cover_url: results[0].cover_url }).eq('id', b.id)
+        fixed++
+      }
+    } catch (_) {}
+    onProgress?.(fixed, missing.length)
+  }, 3)
+  return fixed
 }
 
 // Run promises with limited concurrency
@@ -2619,6 +2652,41 @@ async function pLimit(items, fn, concurrency = 5, onProgress) {
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker))
   return results
+}
+
+function CoverFetchButton({ userId, onDone }) {
+  const [state, setState] = useState('idle') // idle | running | done
+  const [prog, setProg]   = useState([0, 0])
+
+  async function run() {
+    setState('running')
+    const fixed = await fetchMissingCovers(userId, (done, total) => setProg([done, total]))
+    setState('done')
+    setProg([fixed, fixed])
+    onDone?.()
+  }
+
+  if (state === 'done') return (
+    <p style={{ color: C.success, fontFamily: f.sans, fontSize: 13, margin: '0 0 8px' }}>
+      ✓ Fetched covers for {prog[0]} books
+    </p>
+  )
+  if (state === 'running') return (
+    <div style={{ marginBottom: 12 }}>
+      <p style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, margin: '0 0 6px' }}>
+        Fetching covers… {prog[0]} of {prog[1]}
+      </p>
+      <div style={{ background: C.surface2, borderRadius: 10, height: 6, overflow: 'hidden', maxWidth: 240, margin: '0 auto' }}>
+        <div style={{ height: '100%', borderRadius: 10, background: C.primary, transition: 'width 0.3s',
+          width: prog[1] ? `${Math.round(prog[0]/prog[1]*100)}%` : '4%' }} />
+      </div>
+    </div>
+  )
+  return (
+    <button onClick={run} style={{ ...btn('ghost', 'sm'), marginBottom: 12 }}>
+      🖼️ Fetch Missing Covers
+    </button>
+  )
 }
 
 function ImportModal({ userId, existingBookIds, onClose, onDone }) {
@@ -2679,7 +2747,7 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
         if (error) { failed++; return }
         imported++
       } catch (_) { failed++ }
-    }, 4, (done, total) => setProgress([done, finalRows.length]))
+    }, 3, (done, total) => setProgress([done, finalRows.length]))
 
     setSummary({ imported, skipped, failed })
     setStep('done')
@@ -2884,7 +2952,7 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
           <div style={{ textAlign: 'center', padding: '10px 0' }}>
             <div style={{ fontSize: 48, marginBottom: 12 }}>🎉</div>
             <h3 style={{ margin: '0 0 6px', color: C.text, fontFamily: f.serif, fontSize: 22 }}>Import complete!</h3>
-            <div style={{ display: 'flex', justifyContent: 'center', gap: 16, margin: '16px 0 24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'center', gap: 16, margin: '16px 0 20px' }}>
               {[
                 [summary.imported, 'Imported', C.success],
                 [summary.skipped,  'Skipped',  C.muted],
@@ -2896,7 +2964,10 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
                 </div>
               ))}
             </div>
-            <button onClick={() => { onDone?.(); onClose() }} style={btn('primary', 'lg')}>
+            {summary.failed > 0 && (
+              <CoverFetchButton userId={userId} />
+            )}
+            <button onClick={() => { onDone?.(); onClose() }} style={{ ...btn('primary', 'lg'), marginTop: 12 }}>
               View My Library
             </button>
           </div>
