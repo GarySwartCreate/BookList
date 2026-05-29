@@ -2623,18 +2623,25 @@ export default function App() {
       inviteFromRef.current = null // only once
       // Clean URL without reloading
       window.history.replaceState({}, '', window.location.pathname)
-      // Check not already friends, then send request
+      // Auto-accept friendship so both sides see each other's books immediately
       supabase.from('friendships')
-        .select('id').or(
+        .select('id, status').or(
           `and(requester_id.eq.${session.user.id},addressee_id.eq.${inviteFrom}),` +
           `and(requester_id.eq.${inviteFrom},addressee_id.eq.${session.user.id})`
         ).maybeSingle()
         .then(({ data: existing }) => {
           if (!existing) {
+            // No relationship yet — create as accepted straight away
             supabase.from('friendships').insert({
               requester_id: session.user.id,
               addressee_id: inviteFrom,
-            }).then(() => setView('friends'))
+              status: 'accepted',
+            }).then(() => setView('home'))
+          } else if (existing.status === 'pending') {
+            // Inviter already sent a request — just accept it
+            supabase.from('friendships')
+              .update({ status: 'accepted' }).eq('id', existing.id)
+              .then(() => setView('home'))
           }
         })
     }
