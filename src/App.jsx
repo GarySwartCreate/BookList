@@ -1131,19 +1131,18 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal }) 
   }
 
   return (
-    <div style={{ flexShrink: 0, position: 'relative', cursor: 'pointer' }}
-      onClick={onOpenModal}
+    <div style={{ flexShrink: 0, position: 'relative' }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}>
       {showRating && (
         <RatingPopup title={book.title} onRate={handleRated}
           onSkip={() => { setShowRating(false); onAdded?.(book.id) }} />
       )}
-      <PosterCard book={book} />
+      <PosterCard book={book} onClick={onOpenModal} />
 
-      {/* Hover overlay — stopPropagation so buttons don't also open modal */}
+      {/* Hover overlay — clicks on background open modal, buttons stop propagation */}
       {hovered && (
-        <div onClick={e => e.stopPropagation()} style={{
+        <div onClick={onOpenModal} style={{
           position: 'absolute', inset: 0, borderRadius: 8,
           background: 'rgba(10,8,24,0.72)',
           display: 'flex', flexDirection: 'column',
@@ -1166,7 +1165,7 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal }) 
                 { st: 'not_for_me',   icon: '✕',  bg: '#3d1f1f',  fg: '#ff7070', label: 'Not for Me',    dismiss: true  },
               ].map(({ st, icon, bg, fg, label, dismiss }) => (
                 <button key={st}
-                  onClick={() => dismiss ? handleDismiss() : handleAdd(st)}
+                  onClick={(e) => { e.stopPropagation(); dismiss ? handleDismiss() : handleAdd(st) }}
                   title={label}
                   disabled={!!adding}
                   style={{
