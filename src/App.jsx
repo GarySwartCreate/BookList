@@ -14,7 +14,7 @@ const supabase = createClient(
 const GOOGLE_BOOKS_KEY = import.meta.env.VITE_GOOGLE_BOOKS_API_KEY || ''
 
 // ─── Design tokens ───────────────────────────────────────────────
-const C = {
+const DARK_THEME = {
   bg:         '#0f1117',
   surface:    '#1a1d2e',
   surface2:   '#242840',
@@ -31,6 +31,27 @@ const C = {
   overlay:    'rgba(0,0,0,0.85)',
   white:      '#ffffff',
 }
+
+const LIGHT_THEME = {
+  bg:         '#F9F6F0',
+  surface:    '#EFEBE2',
+  surface2:   '#E5E0D5',
+  border:     '#CCC8BB',
+  text:       '#1c1830',
+  muted:      '#7a7060',
+  primary:    '#5b54d6',
+  primaryDim: '#4038b0',
+  accent:     '#c8860a',
+  success:    '#1a9e6e',
+  star:       '#c8860a',
+  danger:     '#c0392b',
+  nav:        '#EDE9E0',
+  overlay:    'rgba(0,0,0,0.55)',
+  white:      '#ffffff',
+}
+
+// Mutable — reassigned by App before each render based on theme state
+let C = DARK_THEME
 
 const f = {
   serif: 'Georgia, "Times New Roman", serif',
@@ -2404,7 +2425,7 @@ function ProfilePage({ userId, profile, onProfileUpdate, onSignOut }) {
 // ================================================================
 // Nav
 // ================================================================
-function Nav({ view, setView, profile }) {
+function Nav({ view, setView, profile, theme, toggleTheme }) {
   const tabs = [
     ['home',    '🏠', 'Home'],
     ['mylist',  '📚', 'My List'],
@@ -2443,6 +2464,17 @@ function Nav({ view, setView, profile }) {
             </button>
           ))}
         </div>
+
+        {/* Theme toggle */}
+        <button onClick={toggleTheme} title={theme === 'dark' ? 'Switch to day mode' : 'Switch to night mode'}
+          style={{
+            background: C.surface2, border: `1px solid ${C.border}`,
+            borderRadius: 20, cursor: 'pointer', fontSize: 16,
+            width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0, marginRight: 12, transition: 'background 0.2s',
+          }}>
+          {theme === 'dark' ? '☀️' : '🌙'}
+        </button>
 
         {/* Profile chip — circular avatar + name, like WatchList */}
         <button onClick={() => setView('profile')} style={{
@@ -2484,6 +2516,16 @@ export default function App() {
   const [session, setSession] = useState(undefined)
   const [profile, setProfile] = useState(null)
   const [view,    setView]    = useState('home')
+  const [theme,   setTheme]   = useState(() => localStorage.getItem('bl-theme') || 'dark')
+
+  // Apply theme before render — all components read module-level C
+  C = theme === 'light' ? LIGHT_THEME : DARK_THEME
+
+  function toggleTheme() {
+    const next = theme === 'dark' ? 'light' : 'dark'
+    localStorage.setItem('bl-theme', next)
+    setTheme(next)
+  }
 
   // Capture invite param on load
   const inviteFromRef = useRef(new URLSearchParams(window.location.search).get('invite'))
@@ -2555,7 +2597,7 @@ export default function App() {
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg }}>
-      <Nav view={view} setView={setView} profile={profile} />
+      <Nav view={view} setView={setView} profile={profile} theme={theme} toggleTheme={toggleTheme} />
       <main style={{ maxWidth: 960, margin: '0 auto', padding: '32px 20px 80px' }}>
         {view === 'home'     && <HomePage     userId={userId} setView={setView} />}
         {view === 'mylist'   && <MyListPage   userId={userId} />}
