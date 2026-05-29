@@ -1096,7 +1096,7 @@ function AuthPage({ inviteFrom }) {
 // ================================================================
 // RecoCard – poster with WatchList-style hover quick-add circles
 // ================================================================
-function RecoCard({ book, userId, myBookIds, onAdded, onDismiss }) {
+function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal }) {
   const [hovered,  setHovered]  = useState(false)
   const [adding,   setAdding]   = useState(null)
   const [added,    setAdded]    = useState(null)
@@ -1132,7 +1132,7 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss }) {
       {showRating && (
         <RatingPopup title={book.title} onRate={handleRated} onSkip={() => setShowRating(false)} />
       )}
-      <PosterCard book={book} />
+      <PosterCard book={book} onClick={onOpenModal} />
 
       {/* Hover overlay */}
       {hovered && (
@@ -1159,7 +1159,7 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss }) {
                 { st: 'not_for_me',   icon: '✕',  bg: '#3d1f1f',  fg: '#ff7070', label: 'Not for Me',    dismiss: true  },
               ].map(({ st, icon, bg, fg, label, dismiss }) => (
                 <button key={st}
-                  onClick={() => dismiss ? handleDismiss() : handleAdd(st)}
+                  onClick={(e) => { e.stopPropagation(); dismiss ? handleDismiss() : handleAdd(st) }}
                   title={label}
                   disabled={!!adding}
                   style={{
@@ -1451,7 +1451,8 @@ function HomePage({ userId, setView }) {
                 <RecoCard key={book.id} book={book} userId={userId}
                   myBookIds={myBookIds}
                   onAdded={id => { setMyBookIds(prev => new Set([...prev, id])); loadHomeData() }}
-                  onDismiss={id => setDismissedRecs(prev => new Set([...prev, id]))} />
+                  onDismiss={id => setDismissedRecs(prev => new Set([...prev, id]))}
+                  onOpenModal={() => setModal({ type: 'search', book })} />
               )}
               emptyMsg=""
               loading={false}
@@ -1465,7 +1466,8 @@ function HomePage({ userId, setView }) {
               <RecoCard key={book.id} book={book} userId={userId}
                 myBookIds={myBookIds}
                 onAdded={id => { setMyBookIds(prev => new Set([...prev, id])); loadHomeData() }}
-                onDismiss={id => setDismissedRecs(prev => new Set([...prev, id]))} />
+                onDismiss={id => setDismissedRecs(prev => new Set([...prev, id]))}
+                onOpenModal={() => setModal({ type: 'search', book })} />
             )}
             emptyMsg="Loading recommendations…"
             loading={loadingData}
