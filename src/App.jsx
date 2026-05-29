@@ -1108,8 +1108,12 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal }) 
     try {
       await addToLibrary(userId, book, status)
       setAdded(status)
-      onAdded?.(book.id)
-      if (status === 'read') setShowRating(true)
+      if (status === 'read') {
+        setShowRating(true)
+        // Don't call onAdded yet — wait until after rating so card stays mounted
+      } else {
+        onAdded?.(book.id)
+      }
     } catch (e) { alert(e.message) }
     setAdding(null)
   }
@@ -1123,20 +1127,23 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal }) 
     await supabase.from('user_books')
       .update({ rating: stars }).eq('user_id', userId).eq('book_id', book.id)
     setShowRating(false)
+    onAdded?.(book.id)  // reload after rating is saved
   }
 
   return (
-    <div style={{ flexShrink: 0, position: 'relative' }}
+    <div style={{ flexShrink: 0, position: 'relative', cursor: 'pointer' }}
+      onClick={onOpenModal}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}>
       {showRating && (
-        <RatingPopup title={book.title} onRate={handleRated} onSkip={() => setShowRating(false)} />
+        <RatingPopup title={book.title} onRate={handleRated}
+          onSkip={() => { setShowRating(false); onAdded?.(book.id) }} />
       )}
-      <PosterCard book={book} onClick={onOpenModal} />
+      <PosterCard book={book} />
 
-      {/* Hover overlay */}
+      {/* Hover overlay — stopPropagation so buttons don't also open modal */}
       {hovered && (
-        <div style={{
+        <div onClick={e => e.stopPropagation()} style={{
           position: 'absolute', inset: 0, borderRadius: 8,
           background: 'rgba(10,8,24,0.72)',
           display: 'flex', flexDirection: 'column',
@@ -1159,7 +1166,7 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal }) 
                 { st: 'not_for_me',   icon: '✕',  bg: '#3d1f1f',  fg: '#ff7070', label: 'Not for Me',    dismiss: true  },
               ].map(({ st, icon, bg, fg, label, dismiss }) => (
                 <button key={st}
-                  onClick={(e) => { e.stopPropagation(); dismiss ? handleDismiss() : handleAdd(st) }}
+                  onClick={() => dismiss ? handleDismiss() : handleAdd(st)}
                   title={label}
                   disabled={!!adding}
                   style={{
