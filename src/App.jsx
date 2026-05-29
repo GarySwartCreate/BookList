@@ -366,7 +366,7 @@ function SearchResultCard({ book, userId, myBookIds, onAdded, onOpenModal }) {
 
   async function handleRated(stars) {
     await supabase.from('user_books')
-      .update({ rating: stars, updated_at: new Date().toISOString() })
+      .update({ rating: stars })
       .eq('user_id', userId).eq('book_id', book.id)
     setShowRatingPopup(false)
   }
@@ -515,14 +515,18 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
   const [rating,       setRating]       = useState(userBook?.rating || null)
   const [notes,        setNotes]        = useState(userBook?.notes || '')
   const [top10,        setTop10]        = useState(userBook?.top_10 || false)
-  const [saving,       setSaving]       = useState(false)
   const [adding,       setAdding]       = useState(null)
-  const [msg,          setMsg]          = useState(null)
+  const [saved,        setSaved]        = useState(false)   // flash checkmark
   const [showRating,   setShowRating]   = useState(false)
   const [following,    setFollowing]    = useState(false)
   const [isFollowed,   setIsFollowed]   = useState(false)
   const [showTop10Picker, setShowTop10Picker] = useState(false)
   const [existingTop10,   setExistingTop10]   = useState([])
+
+  function flashSaved() {
+    setSaved(true)
+    setTimeout(() => setSaved(false), 1200)
+  }
 
   const authors = book?.authors || []
 
@@ -557,21 +561,32 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
     setAdding(null)
   }
 
-  async function handleSave() {
+  async function handleStatusChange(newStatus) {
     if (!userBook) return
-    setSaving(true)
-    const wasNotRead = userBook.status !== 'read' && status === 'read'
-    await supabase.from('user_books')
-      .update({ status, rating, notes, top_10, updated_at: new Date().toISOString() })
-      .eq('id', userBook.id)
-    setSaving(false)
+    const wasNotRead = userBook.status !== 'read' && newStatus === 'read'
+    setStatus(newStatus)
+    await supabase.from('user_books').update({ status: newStatus }).eq('id', userBook.id)
+    onUpdate?.()
     if (wasNotRead && !rating) {
       setShowRating(true)
     } else {
-      onUpdate?.()
-      setMsg({ type: 'success', text: 'Saved!' })
-      setTimeout(() => setMsg(null), 2000)
+      flashSaved()
     }
+  }
+
+  async function handleRatingChange(stars) {
+    if (!userBook) return
+    setRating(stars)
+    await supabase.from('user_books').update({ rating: stars }).eq('id', userBook.id)
+    onUpdate?.()
+    flashSaved()
+  }
+
+  async function handleNotesSave() {
+    if (!userBook) return
+    await supabase.from('user_books').update({ notes }).eq('id', userBook.id)
+    onUpdate?.()
+    flashSaved()
   }
 
   async function handleToggleTop10() {
@@ -580,7 +595,7 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
       // Removing from Top 10
       setTop10(false)
       await supabase.from('user_books')
-        .update({ top_10: false, updated_at: new Date().toISOString() }).eq('id', userBook.id)
+        .update({ top_10: false }).eq('id', userBook.id)
       onUpdate?.()
       setMsg({ type: 'success', text: 'Removed from Top 10' })
       setTimeout(() => setMsg(null), 2000)
@@ -596,7 +611,7 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
     } else {
       setTop10(true)
       await supabase.from('user_books')
-        .update({ top_10: true, updated_at: new Date().toISOString() }).eq('id', userBook.id)
+        .update({ top_10: true }).eq('id', userBook.id)
       onUpdate?.()
       setMsg({ type: 'success', text: '⭐ Added to Top 10!' })
       setTimeout(() => setMsg(null), 2000)
@@ -607,7 +622,7 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
     // Remove one, add current
     await supabase.from('user_books').update({ top_10: false }).eq('id', removeId)
     await supabase.from('user_books')
-      .update({ top_10: true, updated_at: new Date().toISOString() }).eq('id', userBook.id)
+      .update({ top_10: true }).eq('id', userBook.id)
     setTop10(true)
     setShowTop10Picker(false)
     onUpdate?.()
@@ -616,12 +631,12 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
   }
 
   async function handleRated(stars) {
-    // Save rating then close
     const target = userBook
-      ? supabase.from('user_books').update({ rating: stars, updated_at: new Date().toISOString() }).eq('id', userBook.id)
-      : supabase.from('user_books').update({ rating: stars, updated_at: new Date().toISOString() })
+      ? supabase.from('user_books').update({ rating: stars }).eq('id', userBook.id)
+      : supabase.from('user_books').update({ rating: stars })
           .eq('user_id', userId).eq('book_id', book.id)
     await target
+    setRating(stars)
     setShowRating(false)
     onUpdate?.()
     onClose()
@@ -647,12 +662,6 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
     onUpdate?.()
     onClose()
   }
-
-  const statusChanged = status !== userBook?.status
-  const ratingChanged = rating !== userBook?.rating
-  const notesChanged  = notes  !== (userBook?.notes || '')
-  const top10Changed  = top10  !== (userBook?.top_10 || false)
-  const isDirty = statusChanged || ratingChanged || notesChanged || top10Changed
 
   return (
     <>
@@ -794,7 +803,7 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
                 textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Status</p>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {Object.entries(STATUS_LABELS).map(([key, lbl]) => (
-                  <button key={key} onClick={() => setStatus(key)}
+                  <button key={key} onClick={() => handleStatusChange(key)}
                     style={{ ...pill(status === key), fontSize: 12 }}>
                     {STATUS_ICONS[key]} {lbl}
                   </button>
@@ -803,29 +812,24 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
             </div>
 
             <div style={{ marginBottom: 16 }}>
-              <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
-                textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>My Rating</p>
-              <StarRating value={rating} onChange={setRating} size={24} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                <p style={{ margin: 0, fontSize: 11, color: C.muted, fontFamily: f.sans,
+                  textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>My Rating</p>
+                {saved && <span style={{ fontSize: 11, color: C.success, fontFamily: f.sans }}>✓ Saved</span>}
+              </div>
+              <StarRating value={rating} onChange={handleRatingChange} size={24} />
             </div>
 
             <div style={{ marginBottom: 20 }}>
               <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
                 textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Notes</p>
               <textarea value={notes} onChange={e => setNotes(e.target.value)}
+                onBlur={handleNotesSave}
                 placeholder="Your thoughts, quotes, reflections…"
                 style={{ ...inputStyle, height: 80, resize: 'vertical', fontSize: 13 }} />
             </div>
 
-            {msg && (
-              <p style={{ margin: '0 0 12px', fontSize: 13, fontFamily: f.sans,
-                color: msg.type === 'success' ? C.success : C.danger }}>{msg.text}</p>
-            )}
-
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-              <button onClick={handleSave} disabled={!isDirty || saving}
-                style={{ ...btn('primary'), opacity: (!isDirty || saving) ? 0.5 : 1 }}>
-                {saving ? 'Saving…' : '✓ Save Changes'}
-              </button>
               <button onClick={handleToggleTop10}
                 style={{
                   ...btn(top10 ? 'accent' : 'ghost', 'sm'),
