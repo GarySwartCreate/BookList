@@ -559,6 +559,7 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
   const [isFollowed,   setIsFollowed]   = useState(false)
   const [showTop10Picker, setShowTop10Picker] = useState(false)
   const [existingTop10,   setExistingTop10]   = useState([])
+  const [msg,             setMsg]             = useState(null)
 
   function flashSaved() {
     setSaved(true)
