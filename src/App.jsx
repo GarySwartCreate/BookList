@@ -2303,6 +2303,7 @@ function ProfilePage({ userId, profile, onProfileUpdate, onSignOut }) {
   const [topBooks,    setTopBooks]    = useState([])
   const [follows,     setFollows]     = useState([])
   const [modal,       setModal]       = useState(null)
+  const [showImport,  setShowImport]  = useState(false)
 
   useEffect(() => {
     // Load stats
@@ -2412,9 +2413,14 @@ function ProfilePage({ userId, profile, onProfileUpdate, onSignOut }) {
             {msg.text}
           </p>
         )}
-        <button onClick={saveProfile} disabled={saving} style={btn('primary')}>
-          {saving ? 'Saving…' : 'Save Profile'}
-        </button>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button onClick={saveProfile} disabled={saving} style={btn('primary')}>
+            {saving ? 'Saving…' : 'Save Profile'}
+          </button>
+          <button onClick={() => setShowImport(true)} style={btn('ghost')}>
+            📥 Import Library
+          </button>
+        </div>
       </div>
 
       {/* Reading stats */}
@@ -2483,6 +2489,374 @@ function ProfilePage({ userId, profile, onProfileUpdate, onSignOut }) {
           onClose={() => setModal(null)}
           onUpdate={() => setModal(null)} />
       )}
+      {showImport && (
+        <ImportModal
+          userId={userId}
+          existingBookIds={new Set(topBooks.map(ub => ub.book_id))}
+          onClose={() => setShowImport(false)}
+          onDone={() => { onProfileUpdate?.(); setShowImport(false) }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ================================================================
+// CSV Import Modal – Goodreads · Amazon · Audible
+// ================================================================
+
+// ── CSV parser (handles quoted fields, escaped quotes) ───────────
+function parseCSVLine(line) {
+  const result = []; let cur = ''; let inQ = false
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === '"') {
+      if (inQ && line[i + 1] === '"') { cur += '"'; i++ }
+      else inQ = !inQ
+    } else if (line[i] === ',' && !inQ) { result.push(cur); cur = '' }
+    else cur += line[i]
+  }
+  result.push(cur); return result
+}
+function parseCSV(text) {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+  const headers = parseCSVLine(lines[0]).map(h => h.trim())
+  return lines.slice(1).filter(l => l.trim()).map(l => {
+    const vals = parseCSVLine(l)
+    const row = {}
+    headers.forEach((h, i) => { row[h] = (vals[i] || '').trim() })
+    return row
+  })
+}
+
+function detectCSVFormat(headers) {
+  const h = new Set(headers.map(x => x.toLowerCase()))
+  if (h.has('exclusive shelf') || h.has('bookshelves')) return 'goodreads'
+  if (h.has('asin/isbn') || (h.has('order id') && h.has('title'))) return 'amazon'
+  if (h.has('narrator') || h.has('purchase date')) return 'audible'
+  return null
+}
+
+const GR_SHELF = { 'read': 'read', 'currently-reading': 'reading', 'to-read': 'want_to_read' }
+
+function mapImportRow(row, fmt) {
+  if (fmt === 'goodreads') {
+    const isbn = (row['ISBN13'] || row['ISBN'] || '').replace(/[="]/g, '')
+    const rating = parseInt(row['My Rating']) || null
+    return {
+      title:  row['Title'] || '',
+      author: row['Author'] || row['Author l-f'] || '',
+      isbn:   isbn || null,
+      status: GR_SHELF[row['Exclusive Shelf']] || 'want_to_read',
+      rating: (rating && rating > 0) ? rating : null,
+      notes:  row['My Review'] || '',
+    }
+  }
+  if (fmt === 'amazon') {
+    const cat = (row['Category'] || '').toLowerCase()
+    if (!cat.includes('book') && !cat.includes('kindle') && !cat.includes('digital')) return null
+    return {
+      title:  row['Title'] || '',
+      author: '',
+      isbn:   (row['ASIN/ISBN'] || '').replace(/[="]/g, '') || null,
+      status: 'want_to_read',
+      rating: null,
+      notes:  '',
+    }
+  }
+  if (fmt === 'audible') {
+    return {
+      title:  row['Title'] || '',
+      author: row['Author'] || row['Authors'] || '',
+      isbn:   null,
+      status: 'read',
+      rating: null,
+      notes:  '',
+    }
+  }
+  return null
+}
+
+// Fetch Google Books metadata (ISBN first, then title search)
+async function fetchBookMeta(item) {
+  const query = item.isbn ? `isbn:${item.isbn}` : `intitle:"${item.title}"${item.author ? `+inauthor:"${item.author}"` : ''}`
+  try {
+    const results = await searchGoogleBooks(query, 1)
+    if (results.length > 0) return results[0]
+  } catch (_) {}
+  // Fallback: construct minimal book object with a synthetic ID
+  return {
+    id:             `import_${btoa(item.title + item.author).replace(/[^a-z0-9]/gi, '').slice(0, 20)}`,
+    title:          item.title,
+    authors:        item.author ? [item.author] : [],
+    description:    '',
+    cover_url:      null,
+    categories:     [],
+    published_date: '',
+    page_count:     null,
+    isbn:           item.isbn,
+  }
+}
+
+// Run promises with limited concurrency
+async function pLimit(items, fn, concurrency = 5, onProgress) {
+  const results = []
+  let idx = 0
+  async function worker() {
+    while (idx < items.length) {
+      const i = idx++
+      results[i] = await fn(items[i], i)
+      onProgress?.(results.filter(Boolean).length, items.length)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker))
+  return results
+}
+
+function ImportModal({ userId, existingBookIds, onClose, onDone }) {
+  const isMobile = useIsMobile()
+  const [step,     setStep]     = useState('upload')   // upload | preview | importing | done
+  const [format,   setFormat]   = useState(null)
+  const [rows,     setRows]     = useState([])          // parsed + mapped rows
+  const [progress, setProgress] = useState([0, 0])     // [done, total]
+  const [summary,  setSummary]  = useState(null)        // { imported, skipped, failed }
+  const [err,      setErr]      = useState(null)
+  const fileRef = useRef()
+
+  function handleFile(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setErr(null)
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const parsed = parseCSV(ev.target.result)
+        if (!parsed.length) { setErr('File appears empty.'); return }
+        const fmt = detectCSVFormat(Object.keys(parsed[0]))
+        if (!fmt) { setErr('Could not detect format. Supported: Goodreads, Amazon orders, Audible library.'); return }
+        const mapped = parsed.map(r => mapImportRow(r, fmt)).filter(Boolean).filter(r => r.title)
+        if (!mapped.length) { setErr('No importable books found in this file.'); return }
+        setFormat(fmt)
+        setRows(mapped)
+        setStep('preview')
+      } catch (e2) { setErr('Failed to parse CSV: ' + e2.message) }
+    }
+    reader.readAsText(file)
+  }
+
+  async function handleImport() {
+    setStep('importing')
+    setProgress([0, rows.length])
+    let imported = 0, skipped = 0, failed = 0
+
+    await pLimit(rows, async (item) => {
+      try {
+        const book = await fetchBookMeta(item)
+        if (!book?.id) { failed++; return }
+        await upsertBook(book)
+        const { error } = await supabase.from('user_books').upsert({
+          user_id: userId, book_id: book.id,
+          status:  item.status, rating: item.rating || null,
+          notes:   item.notes  || null,
+          position: 0,
+        }, { onConflict: 'user_id,book_id' })
+        if (error) { failed++; return }
+        imported++
+      } catch (_) { failed++ }
+    }, 4, (done, total) => setProgress([done, total]))
+
+    setSummary({ imported, skipped, failed })
+    setStep('done')
+  }
+
+  const FORMAT_LABELS = { goodreads: 'Goodreads', amazon: 'Amazon', audible: 'Audible' }
+  const FORMAT_ICONS  = { goodreads: '📗', amazon: '📦', audible: '🎧' }
+  const STATUS_MAP_LABEL = { read: '✅ Read', reading: '📖 Reading', want_to_read: '🔖 Want to Read' }
+
+  return (
+    <div onClick={e => e.target === e.currentTarget && onClose()}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1200,
+        background: 'rgba(5,4,15,0.92)', backdropFilter: 'blur(6px)',
+        display: 'flex', alignItems: isMobile ? 'flex-end' : 'center',
+        justifyContent: 'center', padding: isMobile ? 0 : 20,
+      }}>
+      <div style={{
+        background: C.surface, width: '100%',
+        maxWidth: isMobile ? '100%' : 660,
+        maxHeight: isMobile ? '90vh' : '88vh',
+        borderRadius: isMobile ? '16px 16px 0 0' : 14,
+        padding: isMobile ? '20px 16px 32px' : 28,
+        overflowY: 'auto', border: `1px solid ${C.border}`,
+        boxShadow: '0 24px 80px rgba(0,0,0,0.7)', position: 'relative',
+      }}>
+        <button onClick={onClose} style={{
+          position: 'absolute', top: 14, right: 14, background: C.surface2,
+          border: 'none', color: C.muted, borderRadius: '50%', width: 30, height: 30,
+          cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>×</button>
+
+        <h2 style={{ margin: '0 0 4px', color: C.text, fontFamily: f.serif, fontSize: 22 }}>
+          📥 Import Library
+        </h2>
+        <p style={{ margin: '0 0 20px', color: C.muted, fontFamily: f.sans, fontSize: 13 }}>
+          Supports Goodreads export, Amazon order history, and Audible library CSVs.
+        </p>
+
+        {/* UPLOAD */}
+        {step === 'upload' && (
+          <div>
+            <div
+              onClick={() => fileRef.current?.click()}
+              style={{
+                border: `2px dashed ${C.border}`, borderRadius: 12, padding: '40px 20px',
+                textAlign: 'center', cursor: 'pointer', transition: 'border-color 0.2s',
+              }}
+              onMouseEnter={e => e.currentTarget.style.borderColor = C.primary}
+              onMouseLeave={e => e.currentTarget.style.borderColor = C.border}
+            >
+              <div style={{ fontSize: 40, marginBottom: 12 }}>📂</div>
+              <p style={{ margin: '0 0 6px', color: C.text, fontFamily: f.sans, fontWeight: 600, fontSize: 15 }}>
+                Click to choose a CSV file
+              </p>
+              <p style={{ margin: 0, color: C.muted, fontFamily: f.sans, fontSize: 12 }}>
+                Goodreads · Amazon orders · Audible library
+              </p>
+            </div>
+            <input ref={fileRef} type="file" accept=".csv,text/csv"
+              onChange={handleFile} style={{ display: 'none' }} />
+            {err && <p style={{ marginTop: 12, color: C.danger, fontFamily: f.sans, fontSize: 13 }}>{err}</p>}
+
+            <div style={{ marginTop: 20, padding: 14, background: C.surface2, borderRadius: 8 }}>
+              <p style={{ margin: '0 0 8px', color: C.text, fontFamily: f.sans, fontSize: 12, fontWeight: 700 }}>How to export:</p>
+              <p style={{ margin: '0 0 4px', color: C.muted, fontFamily: f.sans, fontSize: 12 }}>
+                <strong style={{ color: C.text }}>Goodreads:</strong> My Books → Import/Export → Export Library
+              </p>
+              <p style={{ margin: '0 0 4px', color: C.muted, fontFamily: f.sans, fontSize: 12 }}>
+                <strong style={{ color: C.text }}>Amazon:</strong> Account → Order History → Request Report
+              </p>
+              <p style={{ margin: 0, color: C.muted, fontFamily: f.sans, fontSize: 12 }}>
+                <strong style={{ color: C.text }}>Audible:</strong> Use the "Audible Library Exporter" browser extension
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* PREVIEW */}
+        {step === 'preview' && (
+          <div>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16,
+              padding: '10px 14px', background: C.surface2, borderRadius: 8,
+            }}>
+              <span style={{ fontSize: 22 }}>{FORMAT_ICONS[format]}</span>
+              <div>
+                <p style={{ margin: 0, color: C.text, fontFamily: f.sans, fontWeight: 700, fontSize: 14 }}>
+                  {FORMAT_LABELS[format]} export detected
+                </p>
+                <p style={{ margin: 0, color: C.muted, fontFamily: f.sans, fontSize: 12 }}>
+                  {rows.length} books found
+                </p>
+              </div>
+            </div>
+
+            <div style={{ maxHeight: 320, overflowY: 'auto', marginBottom: 20 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: f.sans, fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                    {['Title', 'Author', 'Status', 'Rating'].map(h => (
+                      <th key={h} style={{ padding: '6px 8px', color: C.muted, fontWeight: 700,
+                        fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', textAlign: 'left' }}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.slice(0, 100).map((r, i) => (
+                    <tr key={i} style={{ borderBottom: `1px solid ${C.border}20` }}>
+                      <td style={{ padding: '7px 8px', color: C.text, maxWidth: 200,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {r.title}
+                      </td>
+                      <td style={{ padding: '7px 8px', color: C.muted, maxWidth: 140,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {r.author}
+                      </td>
+                      <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>
+                        <StatusBadge status={r.status} />
+                      </td>
+                      <td style={{ padding: '7px 8px', color: C.star, whiteSpace: 'nowrap' }}>
+                        {r.rating ? '★'.repeat(r.rating) : <span style={{ color: C.border }}>—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {rows.length > 100 && (
+                <p style={{ textAlign: 'center', color: C.muted, fontFamily: f.sans,
+                  fontSize: 12, margin: '10px 0 0' }}>
+                  …and {rows.length - 100} more
+                </p>
+              )}
+            </div>
+
+            <p style={{ margin: '0 0 16px', color: C.muted, fontFamily: f.sans, fontSize: 12 }}>
+              BookList will fetch cover art and metadata from Google Books. This may take a moment for large libraries.
+            </p>
+
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={handleImport} style={btn('primary')}>
+                Import {rows.length} Books
+              </button>
+              <button onClick={() => { setStep('upload'); setRows([]); setFormat(null) }} style={btn('subtle')}>
+                Choose Different File
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* IMPORTING */}
+        {step === 'importing' && (
+          <div style={{ textAlign: 'center', padding: '20px 0' }}>
+            <div style={{ fontSize: 40, marginBottom: 16 }}>📚</div>
+            <p style={{ margin: '0 0 8px', color: C.text, fontFamily: f.sans, fontWeight: 700, fontSize: 16 }}>
+              Importing your library…
+            </p>
+            <p style={{ margin: '0 0 20px', color: C.muted, fontFamily: f.sans, fontSize: 13 }}>
+              {progress[0]} of {progress[1]} books
+            </p>
+            <div style={{ background: C.surface2, borderRadius: 10, height: 8, overflow: 'hidden', maxWidth: 320, margin: '0 auto' }}>
+              <div style={{
+                height: '100%', borderRadius: 10, background: C.primary, transition: 'width 0.3s',
+                width: progress[1] ? `${Math.round(progress[0] / progress[1] * 100)}%` : '0%',
+              }} />
+            </div>
+          </div>
+        )}
+
+        {/* DONE */}
+        {step === 'done' && summary && (
+          <div style={{ textAlign: 'center', padding: '10px 0' }}>
+            <div style={{ fontSize: 48, marginBottom: 12 }}>🎉</div>
+            <h3 style={{ margin: '0 0 6px', color: C.text, fontFamily: f.serif, fontSize: 22 }}>Import complete!</h3>
+            <div style={{ display: 'flex', justifyContent: 'center', gap: 16, margin: '16px 0 24px' }}>
+              {[
+                [summary.imported, 'Imported', C.success],
+                [summary.skipped,  'Skipped',  C.muted],
+                [summary.failed,   'Failed',   summary.failed > 0 ? C.danger : C.muted],
+              ].map(([n, lbl, color]) => (
+                <div key={lbl} style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 28, fontWeight: 700, color, fontFamily: f.sans }}>{n}</div>
+                  <div style={{ fontSize: 12, color: C.muted, fontFamily: f.sans }}>{lbl}</div>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => { onDone?.(); onClose() }} style={btn('primary', 'lg')}>
+              View My Library
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
