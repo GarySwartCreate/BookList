@@ -468,7 +468,9 @@ function HorizontalRow({ title, items, renderItem, emptyMsg, loading, seeAllActi
         : (
           <div style={{
             display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 8,
+            paddingRight: 20,
             scrollbarWidth: 'none', msOverflowStyle: 'none',
+            WebkitOverflowScrolling: 'touch',
           }}>
             {items.map(renderItem)}
           </div>
@@ -1256,7 +1258,7 @@ function HomePage({ userId, setView }) {
     } catch (_) { /* optional */ }
 
     // Recently read
-    setRecentlyRead(lib.filter(u => u.status === 'read').slice(0, 12))
+    setRecentlyRead(lib.filter(u => u.status === 'read'))
 
     // Author follows
     try {
@@ -1416,7 +1418,7 @@ function HomePage({ userId, setView }) {
 
           <HorizontalRow
             title="📚 Friends Want to Read"
-            items={friendWant.slice(0, 12)}
+            items={friendWant}
             renderItem={ub => (
               <div key={ub.id} style={{ flexShrink: 0 }}>
                 <PosterCard userBook={ub}
@@ -1433,7 +1435,7 @@ function HomePage({ userId, setView }) {
 
           <HorizontalRow
             title="⭐ Friends' Favorites"
-            items={friendFaves.slice(0, 12)}
+            items={friendFaves}
             renderItem={ub => (
               <div key={ub.id} style={{ flexShrink: 0 }}>
                 <PosterCard userBook={ub}
