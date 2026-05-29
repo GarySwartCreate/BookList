@@ -2532,8 +2532,15 @@ function detectCSVFormat(headers) {
   const h = new Set(headers.map(x => x.toLowerCase()))
   if (h.has('exclusive shelf') || h.has('bookshelves')) return 'goodreads'
   if (h.has('asin/isbn') || (h.has('order id') && h.has('title'))) return 'amazon'
-  if (h.has('narrator') || h.has('purchase date')) return 'audible'
+  if (h.has('narrators') || h.has('narrator') || h.has('purchase date') || (h.has('asin') && h.has('authors'))) return 'audible'
   return null
+}
+
+// Strip Excel-style =HYPERLINK("url"; "Display Text") formulas
+function stripHyperlink(val) {
+  if (!val || !val.startsWith('=')) return val
+  const m = val.match(/=HYPERLINK\s*\([^;,]*[;,]\s*"([^"]+)"\s*\)/i)
+  return m ? m[1] : val.replace(/=HYPERLINK[^)]+\)/i, '').trim()
 }
 
 const GR_SHELF = { 'read': 'read', 'currently-reading': 'reading', 'to-read': 'want_to_read' }
@@ -2564,12 +2571,20 @@ function mapImportRow(row, fmt) {
     }
   }
   if (fmt === 'audible') {
+    const title = stripHyperlink(row['Title'] || row['Title Short'] || '')
+    const rating = parseInt(row['My Rating']) || null
+    const progress = (row['Progress'] || '').toLowerCase()
+    const status = progress.includes('finish') || progress === '100%'
+      ? 'read'
+      : progress && progress !== '' && !progress.includes('not start')
+        ? 'reading'
+        : 'want_to_read'
     return {
-      title:  row['Title'] || '',
-      author: row['Author'] || row['Authors'] || '',
+      title,
+      author: row['Authors'] || row['Author'] || '',
       isbn:   null,
-      status: 'read',
-      rating: null,
+      status,
+      rating: (rating && rating > 0) ? rating : null,
       notes:  '',
     }
   }
