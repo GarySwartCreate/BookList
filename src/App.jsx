@@ -605,7 +605,7 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
     setStatus(newStatus)
     await supabase.from('user_books').update({ status: newStatus }).eq('id', userBook.id)
     onUpdate?.()
-    if (wasNotRead && !rating) {
+    if (newStatus === 'read') {
       setShowRating(true)
     } else {
       flashSaved()
@@ -1528,13 +1528,12 @@ function MyListPage({ userId }) {
       .order('created_at', { ascending: false })
     setUserBooks(data || [])
     setLoading(false)
-    // Silently backfill missing covers then refresh
-    const hasMissing = (data || []).some(u => !u.books?.cover_url)
-    if (hasMissing) {
-      fetchMissingCovers(userId).then(fixed => {
-        if (fixed > 0) fetchBooks()
-      })
-    }
+    // Silently dedup then backfill missing covers, refresh if anything changed
+    deduplicateLibrary(userId).then(removed => {
+      const hasMissing = (data || []).some(u => !u.books?.cover_url)
+      if (removed > 0) { fetchBooks(); return }
+      if (hasMissing) fetchMissingCovers(userId).then(fixed => { if (fixed > 0) fetchBooks() })
+    })
   }, [userId])
 
   useEffect(() => { fetchBooks() }, [fetchBooks])
@@ -2613,6 +2612,67 @@ async function fetchBookMeta(item) {
     page_count:     null,
     isbn:           item.isbn,
   }
+}
+
+// Deduplicate user's library — keeps best copy, merges rating/notes, deletes the rest
+function normTitle(t) { return (t || '').toLowerCase().replace(/[^a-z0-9]/g, '') }
+function normAuthor(a) { return ((Array.isArray(a) ? a[0] : a) || '').toLowerCase().replace(/[^a-z]/g, '').slice(0, 8) }
+
+function isSameBook(a, b) {
+  const ta = normTitle(a.books?.title), tb = normTitle(b.books?.title)
+  if (!ta || !tb) return false
+  // One title must start with the other (handles subtitle variants) + same author prefix
+  const titleMatch = ta.startsWith(tb.slice(0, 12)) || tb.startsWith(ta.slice(0, 12))
+  const authorMatch = normAuthor(a.books?.authors) === normAuthor(b.books?.authors)
+  return titleMatch && authorMatch
+}
+
+async function deduplicateLibrary(userId) {
+  const { data } = await supabase
+    .from('user_books').select('*, books(*)')
+    .eq('user_id', userId)
+  if (!data?.length) return 0
+
+  const used = new Set()
+  const groups = []
+  for (let i = 0; i < data.length; i++) {
+    if (used.has(i)) continue
+    const group = [data[i]]
+    for (let j = i + 1; j < data.length; j++) {
+      if (!used.has(j) && isSameBook(data[i], data[j])) {
+        group.push(data[j]); used.add(j)
+      }
+    }
+    used.add(i)
+    if (group.length > 1) groups.push(group)
+  }
+
+  let removed = 0
+  for (const group of groups) {
+    const scored = group.map(ub => ({
+      ub,
+      score: (ub.books?.cover_url ? 4 : 0)
+           + (!ub.book_id.startsWith('import_') ? 2 : 0)
+           + (ub.rating ? 1 : 0),
+    })).sort((a, b) => b.score - a.score)
+
+    const keeper = scored[0].ub
+    const dupes  = scored.slice(1).map(s => s.ub)
+
+    // Merge best rating + notes into keeper
+    const bestRating = Math.max(...group.map(u => u.rating || 0)) || null
+    const bestNotes  = group.map(u => u.notes).find(n => n) || null
+    if ((bestRating && !keeper.rating) || (bestNotes && !keeper.notes)) {
+      await supabase.from('user_books').update({
+        rating: bestRating || keeper.rating,
+        notes:  bestNotes  || keeper.notes,
+      }).eq('id', keeper.id)
+    }
+
+    await supabase.from('user_books').delete().in('id', dupes.map(d => d.id))
+    removed += dupes.length
+  }
+  return removed
 }
 
 // Fetch covers for books already in DB that are missing cover_url
