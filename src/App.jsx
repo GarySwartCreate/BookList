@@ -2545,7 +2545,7 @@ function stripHyperlink(val) {
 
 const GR_SHELF = { 'read': 'read', 'currently-reading': 'reading', 'to-read': 'want_to_read' }
 
-function mapImportRow(row, fmt) {
+function mapImportRow(row, fmt, defaultStatus = 'read') {
   if (fmt === 'goodreads') {
     const isbn = (row['ISBN13'] || row['ISBN'] || '').replace(/[="]/g, '')
     const rating = parseInt(row['My Rating']) || null
@@ -2565,7 +2565,7 @@ function mapImportRow(row, fmt) {
       title:  row['Title'] || '',
       author: '',
       isbn:   (row['ASIN/ISBN'] || '').replace(/[="]/g, '') || null,
-      status: 'want_to_read',
+      status: defaultStatus,
       rating: null,
       notes:  '',
     }
@@ -2573,17 +2573,11 @@ function mapImportRow(row, fmt) {
   if (fmt === 'audible') {
     const title = stripHyperlink(row['Title'] || row['Title Short'] || '')
     const rating = parseInt(row['My Rating']) || null
-    const progress = (row['Progress'] || '').toLowerCase()
-    const status = progress.includes('finish') || progress === '100%'
-      ? 'read'
-      : progress && progress !== '' && !progress.includes('not start')
-        ? 'reading'
-        : 'want_to_read'
     return {
       title,
       author: row['Authors'] || row['Author'] || '',
       isbn:   null,
-      status,
+      status: defaultStatus,
       rating: (rating && rating > 0) ? rating : null,
       notes:  '',
     }
@@ -2629,12 +2623,13 @@ async function pLimit(items, fn, concurrency = 5, onProgress) {
 
 function ImportModal({ userId, existingBookIds, onClose, onDone }) {
   const isMobile = useIsMobile()
-  const [step,     setStep]     = useState('upload')   // upload | preview | importing | done
-  const [format,   setFormat]   = useState(null)
-  const [rows,     setRows]     = useState([])          // parsed + mapped rows
-  const [progress, setProgress] = useState([0, 0])     // [done, total]
-  const [summary,  setSummary]  = useState(null)        // { imported, skipped, failed }
-  const [err,      setErr]      = useState(null)
+  const [step,          setStep]          = useState('upload')
+  const [format,        setFormat]        = useState(null)
+  const [rows,          setRows]          = useState([])
+  const [defaultStatus, setDefaultStatus] = useState('read')
+  const [progress,      setProgress]      = useState([0, 0])
+  const [summary,       setSummary]       = useState(null)
+  const [err,           setErr]           = useState(null)
   const fileRef = useRef()
 
   function handleFile(e) {
@@ -2648,7 +2643,10 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
         if (!parsed.length) { setErr('File appears empty.'); return }
         const fmt = detectCSVFormat(Object.keys(parsed[0]))
         if (!fmt) { setErr('Could not detect format. Supported: Goodreads, Amazon orders, Audible library.'); return }
-        const mapped = parsed.map(r => mapImportRow(r, fmt)).filter(Boolean).filter(r => r.title)
+        // For Goodreads, status comes from the file; for others default to 'read'
+        const initDefault = fmt === 'goodreads' ? null : 'read'
+        if (initDefault) setDefaultStatus(initDefault)
+        const mapped = parsed.map(r => mapImportRow(r, fmt, initDefault || 'read')).filter(Boolean).filter(r => r.title)
         if (!mapped.length) { setErr('No importable books found in this file.'); return }
         setFormat(fmt)
         setRows(mapped)
@@ -2659,11 +2657,15 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
   }
 
   async function handleImport() {
+    // Re-apply defaultStatus for formats where it's user-chosen
+    const finalRows = format === 'goodreads'
+      ? rows
+      : rows.map(r => ({ ...r, status: defaultStatus }))
     setStep('importing')
-    setProgress([0, rows.length])
+    setProgress([0, finalRows.length])
     let imported = 0, skipped = 0, failed = 0
 
-    await pLimit(rows, async (item) => {
+    await pLimit(finalRows, async (item) => {
       try {
         const book = await fetchBookMeta(item)
         if (!book?.id) { failed++; return }
@@ -2677,7 +2679,7 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
         if (error) { failed++; return }
         imported++
       } catch (_) { failed++ }
-    }, 4, (done, total) => setProgress([done, total]))
+    }, 4, (done, total) => setProgress([done, finalRows.length]))
 
     setSummary({ imported, skipped, failed })
     setStep('done')
@@ -2722,6 +2724,15 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
           <div>
             <div
               onClick={() => fileRef.current?.click()}
+              onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = C.primary }}
+              onDragEnter={e => { e.preventDefault(); e.currentTarget.style.borderColor = C.primary }}
+              onDragLeave={e => e.currentTarget.style.borderColor = C.border}
+              onDrop={e => {
+                e.preventDefault()
+                e.currentTarget.style.borderColor = C.border
+                const file = e.dataTransfer.files?.[0]
+                if (file) handleFile({ target: { files: [file] } })
+              }}
               style={{
                 border: `2px dashed ${C.border}`, borderRadius: 12, padding: '40px 20px',
                 textAlign: 'center', cursor: 'pointer', transition: 'border-color 0.2s',
@@ -2731,7 +2742,7 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
             >
               <div style={{ fontSize: 40, marginBottom: 12 }}>📂</div>
               <p style={{ margin: '0 0 6px', color: C.text, fontFamily: f.sans, fontWeight: 600, fontSize: 15 }}>
-                Click to choose a CSV file
+                Click or drag a CSV file here
               </p>
               <p style={{ margin: 0, color: C.muted, fontFamily: f.sans, fontSize: 12 }}>
                 Goodreads · Amazon orders · Audible library
@@ -2814,6 +2825,25 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
                 </p>
               )}
             </div>
+
+            {format !== 'goodreads' && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16,
+                padding: '12px 14px', background: C.surface2, borderRadius: 8,
+              }}>
+                <span style={{ color: C.text, fontFamily: f.sans, fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
+                  Import all as:
+                </span>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {Object.entries(STATUS_LABELS).map(([key, lbl]) => (
+                    <button key={key} onClick={() => setDefaultStatus(key)}
+                      style={{ ...pill(defaultStatus === key), fontSize: 12 }}>
+                      {STATUS_ICONS[key]} {lbl}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <p style={{ margin: '0 0 16px', color: C.muted, fontFamily: f.sans, fontSize: 12 }}>
               BookList will fetch cover art and metadata from Google Books. This may take a moment for large libraries.
