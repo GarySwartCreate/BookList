@@ -993,130 +993,167 @@ function RatingPopup({ title, onRate, onSkip }) {
   )
 }
 
-// One combined "you finished it!" panel — rate, note, fave, and share with
-// friends all in a single step instead of asking for rating then stopping.
-function FinishedReadingPopup({ title, initialRating, initialNotes, initialFave, shareFriends, sentTo, onSave, onSkip }) {
-  const [hovered,  setHovered]  = useState(0)
-  const [selected, setSelected] = useState(initialRating || 0)
-  const [notes,    setNotes]    = useState(initialNotes || '')
-  const [fave,     setFave]     = useState(!!initialFave)
-  const [shareIds, setShareIds] = useState(new Set())
-  const [saving,   setSaving]   = useState(false)
+// "You finished it!" wizard — WatchList-style: one step at a time
+// (Rate → Notes → Fave → Recommend), each step saving immediately and
+// auto-advancing, instead of asking for just a rating and stopping.
+function FinishedReadingPopup({ title, initialRating, shareFriends, sentTo, onSaveRating, onSaveNotes, onSaveFave, onShareFriend, onFinish }) {
+  const [step,      setStep]     = useState(0) // 0 rate · 1 notes · 2 fave · 3 recommend
+  const [hovered,   setHovered]  = useState(0)
+  const [selected,  setSelected] = useState(initialRating || 0)
+  const [savedFlash, setSavedFlash] = useState(false)
+  const [notes,     setNotes]    = useState('')
+  const [faveOn,    setFaveOn]   = useState(false)
+  const [busy,      setBusy]     = useState(false)
 
   useEffect(() => {
-    function onKey(e) { if (e.key === 'Escape') onSkip() }
+    function onKey(e) { if (e.key === 'Escape') onFinish() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onSkip])
+  }, [onFinish])
 
-  function toggleShare(id) {
-    setShareIds(prev => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
-    })
+  function next() { setStep(s => s + 1) }
+
+  async function pickStar(n) {
+    setSelected(n)
+    setBusy(true)
+    await onSaveRating(n)
+    setBusy(false)
+    setSavedFlash(true)
+    setTimeout(() => { setSavedFlash(false); next() }, 700)
   }
 
-  async function handleSave() {
-    setSaving(true)
-    await onSave({ rating: selected || null, notes: notes.trim(), fave, shareIds: [...shareIds] })
-    setSaving(false)
+  async function saveNotesAndContinue() {
+    setBusy(true)
+    if (notes.trim()) await onSaveNotes(notes.trim())
+    setBusy(false)
+    next()
   }
+
+  async function addFaveAndContinue() {
+    setBusy(true)
+    await onSaveFave()
+    setFaveOn(true)
+    setBusy(false)
+    setTimeout(next, 500)
+  }
+
+  const pillBtn = (variant = 'primary') => ({
+    display: 'block', width: '100%', textAlign: 'center',
+    padding: '16px 20px', borderRadius: 14, cursor: 'pointer', border: 'none',
+    fontFamily: f.sans, fontSize: 15, fontWeight: 700, marginBottom: 12,
+    background: variant === 'primary' ? C.primary : C.surface2,
+    color: variant === 'primary' ? C.white : C.text,
+  })
 
   return (
-    <div onClick={(e) => e.target === e.currentTarget && onSkip()}
+    <div onClick={(e) => e.target === e.currentTarget && onFinish()}
       style={{
         position: 'fixed', inset: 0, zIndex: 1100,
         background: 'rgba(5,4,15,0.88)', backdropFilter: 'blur(6px)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
-        overflowY: 'auto',
       }}>
       <div style={{
-        background: C.surface, borderRadius: 14, padding: 28, maxWidth: 400, width: '100%',
+        background: C.surface, borderRadius: 18, padding: '36px 28px', maxWidth: 380, width: '100%',
         border: `1px solid ${C.border}`, boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
         textAlign: 'center', maxHeight: '90vh', overflowY: 'auto',
       }}>
-        <div style={{ fontSize: 36, marginBottom: 10 }}>✅</div>
-        <h3 style={{ margin: '0 0 4px', color: C.text, fontFamily: f.serif, fontSize: 19 }}>Finished it!</h3>
-        <p style={{ margin: '0 0 20px', color: C.muted, fontFamily: f.sans, fontSize: 13 }}>
-          <em style={{ color: C.text }}>{title}</em>
-        </p>
-
-        <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
-          textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700, textAlign: 'left' }}>Rating</p>
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 6, marginBottom: 18 }}>
-          {[1, 2, 3, 4, 5].map(n => (
-            <span key={n}
-              onMouseEnter={() => setHovered(n)}
-              onMouseLeave={() => setHovered(0)}
-              onClick={() => setSelected(n === selected ? 0 : n)}
-              style={{
-                fontSize: 32, cursor: 'pointer', userSelect: 'none',
-                color: n <= (hovered || selected) ? C.star : C.border,
-                transition: 'color 0.1s, transform 0.1s',
-                transform: n <= (hovered || selected) ? 'scale(1.12)' : 'scale(1)',
-                display: 'inline-block',
-              }}>★</span>
-          ))}
-        </div>
-
-        <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
-          textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700, textAlign: 'left' }}>Notes (optional)</p>
-        <textarea
-          value={notes}
-          onChange={e => setNotes(e.target.value)}
-          placeholder="What did you think?"
-          rows={3}
-          style={{ ...inputStyle, marginBottom: 18, resize: 'vertical', fontFamily: f.sans, fontSize: 13 }}
-        />
-
-        <button onClick={() => setFave(o => !o)} style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-          width: '100%', padding: '10px 14px', borderRadius: 10, cursor: 'pointer', marginBottom: 18,
-          background: fave ? `${C.primary}22` : C.surface2,
-          border: `1px solid ${fave ? C.primary : C.border}`,
-          color: fave ? C.primary : C.text, fontFamily: f.sans, fontSize: 13, fontWeight: 700,
-        }}>
-          {fave ? '🏆 In your Top 10' : '⭐ Add to Top 10'}
-        </button>
-
-        <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
-          textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700, textAlign: 'left' }}>Share with friends</p>
-        <div style={{ marginBottom: 20 }}>
-          {shareFriends === null ? (
-            <p style={{ fontSize: 12, color: C.muted, fontFamily: f.sans, fontStyle: 'italic', margin: 0 }}>Loading friends…</p>
-          ) : shareFriends.length === 0 ? (
-            <p style={{ fontSize: 12, color: C.muted, fontFamily: f.sans, fontStyle: 'italic', margin: 0 }}>No friends yet</p>
-          ) : (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
-              {shareFriends.map(fr => {
-                const already = sentTo?.has(fr.id)
-                const on = shareIds.has(fr.id) || already
-                return (
-                  <button key={fr.id} disabled={already}
-                    onClick={() => toggleShare(fr.id)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 20,
-                      cursor: already ? 'default' : 'pointer',
-                      background: on ? C.primary : C.surface2,
-                      border: `1px solid ${on ? C.primary : C.border}`,
-                      color: on ? C.white : C.text, fontFamily: f.sans, fontSize: 12, fontWeight: 600,
-                      opacity: already ? 0.6 : 1,
-                    }}>
-                    {on ? '✓ ' : ''}{fr.display_name || fr.username}
-                  </button>
-                )
-              })}
+        {step === 0 && (
+          <>
+            <p style={{ margin: '0 0 4px', color: C.muted, fontFamily: f.sans, fontSize: 13 }}>You finished</p>
+            <h3 style={{ margin: '0 0 22px', color: C.text, fontFamily: f.serif, fontSize: 20 }}>
+              <em>{title}</em>
+            </h3>
+            <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginBottom: 16 }}>
+              {[1, 2, 3, 4, 5].map(n => (
+                <span key={n}
+                  onMouseEnter={() => setHovered(n)}
+                  onMouseLeave={() => setHovered(0)}
+                  onClick={() => !busy && pickStar(n)}
+                  style={{
+                    fontSize: 38, cursor: busy ? 'default' : 'pointer', userSelect: 'none',
+                    color: n <= (hovered || selected) ? C.star : C.border,
+                    transition: 'color 0.1s, transform 0.1s',
+                    transform: n <= (hovered || selected) ? 'scale(1.12)' : 'scale(1)',
+                    display: 'inline-block',
+                  }}>★</span>
+              ))}
             </div>
-          )}
-        </div>
+            <p style={{ margin: 0, height: 20, color: C.success, fontFamily: f.sans, fontSize: 14, fontWeight: 700 }}>
+              {savedFlash ? `${selected}/5 saved!` : ' '}
+            </p>
+            <button onClick={next} style={{ ...btn('subtle', 'sm'), marginTop: 14 }}>Skip</button>
+          </>
+        )}
 
-        <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
-          <button onClick={handleSave} disabled={saving} style={{ ...btn('accent'), minWidth: 140 }}>
-            {saving ? 'Saving…' : 'Save & Finish'}
-          </button>
-          <button onClick={onSkip} disabled={saving} style={btn('subtle', 'sm')}>Skip</button>
-        </div>
+        {step === 1 && (
+          <>
+            <h3 style={{ margin: '0 0 4px', color: C.text, fontFamily: f.serif, fontSize: 20 }}>Add a note?</h3>
+            <p style={{ margin: '0 0 18px', color: C.muted, fontFamily: f.sans, fontSize: 13 }}>
+              Jot down your thoughts on <em style={{ color: C.text }}>{title}</em>
+            </p>
+            <textarea
+              autoFocus
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              placeholder="What did you think?"
+              rows={3}
+              style={{ ...inputStyle, marginBottom: 16, resize: 'vertical', fontFamily: f.sans, fontSize: 13, textAlign: 'left' }}
+            />
+            <button onClick={saveNotesAndContinue} disabled={busy} style={pillBtn('primary')}>
+              {notes.trim() ? 'Save & Continue' : 'Continue'}
+            </button>
+            <button onClick={next} style={btn('subtle', 'sm')}>Skip</button>
+          </>
+        )}
+
+        {step === 2 && (
+          <>
+            <h3 style={{ margin: '0 0 4px', color: C.text, fontFamily: f.serif, fontSize: 20 }}>Add to your Top 10?</h3>
+            <p style={{ margin: '0 0 18px', color: C.muted, fontFamily: f.sans, fontSize: 13 }}>
+              Mark <em style={{ color: C.text }}>{title}</em> as one of your favorites
+            </p>
+            <button onClick={addFaveAndContinue} disabled={busy || faveOn} style={pillBtn('primary')}>
+              {faveOn ? '🏆 Added!' : '⭐ Add to Top 10'}
+            </button>
+            <button onClick={next} style={btn('subtle', 'sm')}>Skip</button>
+          </>
+        )}
+
+        {step === 3 && (
+          <>
+            <h3 style={{ margin: '0 0 4px', color: C.text, fontFamily: f.serif, fontSize: 20 }}>Recommend it?</h3>
+            <p style={{ margin: '0 0 18px', color: C.muted, fontFamily: f.sans, fontSize: 13 }}>
+              Share <em style={{ color: C.text }}>{title}</em> with friends
+            </p>
+            {shareFriends === null ? (
+              <p style={{ fontSize: 13, color: C.muted, fontFamily: f.sans, fontStyle: 'italic', marginBottom: 16 }}>
+                Loading friends…
+              </p>
+            ) : shareFriends.length === 0 ? (
+              <p style={{ fontSize: 13, color: C.muted, fontFamily: f.sans, fontStyle: 'italic', marginBottom: 16 }}>
+                No friends yet
+              </p>
+            ) : (
+              <div style={{ marginBottom: 4 }}>
+                {shareFriends.map(fr => {
+                  const already = sentTo?.has(fr.id)
+                  return (
+                    <button key={fr.id} disabled={already}
+                      onClick={() => onShareFriend(fr.id)}
+                      style={{
+                        ...pillBtn(already ? 'subtle' : 'primary'),
+                        cursor: already ? 'default' : 'pointer',
+                        opacity: already ? 0.6 : 1,
+                      }}>
+                      {already ? `✓ Sent to ${fr.display_name || fr.username}` : `👤 Send to ${fr.display_name || fr.username}`}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+            <button onClick={onFinish} style={{ ...btn('subtle', 'sm'), marginTop: 8 }}>Done</button>
+          </>
+        )}
       </div>
     </div>
   )
@@ -1421,55 +1458,56 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
     setTimeout(() => setMsg(null), 2000)
   }
 
-  // Saves rating + notes + fave + friend-shares in one shot, from the
-  // combined "Finished it!" popup — instead of asking for just a rating
-  // and stopping there.
-  async function handleFinishReading({ rating: stars, notes: notesText, fave: faveOn, shareIds }) {
+  // The "Finished it!" wizard (Rate → Notes → Fave → Recommend) saves each
+  // step immediately as the reader moves through it, instead of asking for
+  // just a rating and stopping there.
+  async function handleWizardRating(stars) {
     try {
       const id = await ensureEntry('read')
-
-      const updates = {}
-      if (stars) updates.rating = stars
-      if (notesText) updates.notes = notesText
-      if (Object.keys(updates).length > 0) {
-        const { error } = await supabase.from('user_books').update(updates).eq('id', id)
-        if (error) throw error
-        if (stars) setRating(stars)
-        if (notesText) setNotes(notesText)
-      }
-
-      let top10Blocked = false
-      if (faveOn && !top10) {
-        const { data: currentTop10 } = await supabase.from('user_books')
-          .select('id').eq('user_id', userId).eq('top_10', true)
-        if ((currentTop10 || []).length >= 10) {
-          top10Blocked = true
-        } else {
-          const { error } = await supabase.from('user_books').update({ top_10: true }).eq('id', id)
-          if (error) throw error
-          setTop10(true)
-        }
-      } else if (!faveOn && top10) {
-        const { error } = await supabase.from('user_books').update({ top_10: false }).eq('id', id)
-        if (error) throw error
-        setTop10(false)
-      }
-
-      if (shareIds?.length) {
-        await Promise.all(shareIds.filter(fid => !sentTo.has(fid)).map(fid => sendToFriend(fid)))
-      }
-
-      setShowRating(false)
+      const { error } = await supabase.from('user_books').update({ rating: stars }).eq('id', id)
+      if (error) throw error
+      setRating(stars)
       onUpdate?.()
-      if (top10Blocked) {
-        setMsg({ type: 'error', text: "Saved — but your Top 10 is already full, so this wasn't added to it." })
-        setTimeout(() => setMsg(null), 4000)
-      } else {
-        onClose()
-      }
     } catch (err) {
       flashError(err)
     }
+  }
+
+  async function handleWizardNotes(notesText) {
+    try {
+      const id = await ensureEntry('read')
+      const { error } = await supabase.from('user_books').update({ notes: notesText }).eq('id', id)
+      if (error) throw error
+      setNotes(notesText)
+      onUpdate?.()
+    } catch (err) {
+      flashError(err)
+    }
+  }
+
+  async function handleWizardFave() {
+    try {
+      const id = await ensureEntry('read')
+      const { data: currentTop10 } = await supabase.from('user_books')
+        .select('id').eq('user_id', userId).eq('top_10', true)
+      if ((currentTop10 || []).length >= 10) {
+        setMsg({ type: 'error', text: 'Your Top 10 is already full — remove one first.' })
+        setTimeout(() => setMsg(null), 4000)
+        return
+      }
+      const { error } = await supabase.from('user_books').update({ top_10: true }).eq('id', id)
+      if (error) throw error
+      setTop10(true)
+      onUpdate?.()
+    } catch (err) {
+      flashError(err)
+    }
+  }
+
+  async function handleWizardFinish() {
+    setShowRating(false)
+    onUpdate?.()
+    onClose()
   }
 
   async function toggleFollow() {
@@ -1501,12 +1539,13 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
       <FinishedReadingPopup
         title={book?.title}
         initialRating={rating}
-        initialNotes={notes}
-        initialFave={top10}
         shareFriends={shareFriends}
         sentTo={sentTo}
-        onSave={handleFinishReading}
-        onSkip={() => { setShowRating(false); onUpdate?.(); onClose() }}
+        onSaveRating={handleWizardRating}
+        onSaveNotes={handleWizardNotes}
+        onSaveFave={handleWizardFave}
+        onShareFriend={sendToFriend}
+        onFinish={handleWizardFinish}
       />
     )}
 
