@@ -2848,9 +2848,12 @@ function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack
     reading:      userBooks.filter(u => u.status === 'reading').length,
     read:         userBooks.filter(u => u.status === 'read').length,
     want_to_read: userBooks.filter(u => u.status === 'want_to_read').length,
+    rated:        userBooks.filter(u => (u.rating || 0) > 0).length,
   }
 
-  const baseFiltered = filter === 'all' ? userBooks : userBooks.filter(u => u.status === filter)
+  const baseFiltered = filter === 'all' ? userBooks
+    : filter === 'rated' ? userBooks.filter(u => (u.rating || 0) > 0)
+    : userBooks.filter(u => u.status === filter)
   const matched = baseFiltered
   const isQueue = filter === 'want_to_read'
   const readGenres = useMemo(() => {
@@ -3904,10 +3907,7 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
           {[
             ['Read', stats.read, () => onOpenList?.('read', true)],
             ['Friends', friendCount, () => onGoFriends?.()],
-            ['Rated', stats.rated, () => {
-              setBookStatus('rated'); setShowBookFilter(false)
-              booksRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-            }],
+            ['Rated', stats.rated, () => onOpenList?.('rated', true)],
           ].map(([lbl, n, onClick]) => (
             <button key={lbl} onClick={onClick} style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left',
