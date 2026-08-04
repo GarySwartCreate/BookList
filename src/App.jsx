@@ -3413,6 +3413,8 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
   const [showReadFilter, setShowReadFilter] = useState(false)
   const [readSort,     setReadSort]     = useState('default')
   const [readGenre,    setReadGenre]    = useState('all')
+  const [expandReading,     setExpandReading]     = useState(false)
+  const [expandWantToRead,  setExpandWantToRead]  = useState(false)
 
   useEffect(() => {
     supabase.from('user_books').select('*, books(*)')
@@ -3540,25 +3542,83 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
         </div>
       </div>
 
-      <HorizontalRow
-        title="Reading"
-        icon="▶"
-        iconBg={STATUS_COLORS.reading.color}
-        items={reading}
-        renderItem={renderTile}
-        loading={loading}
-        emptyMsg="Not reading anything right now"
-      />
+      {!expandReading ? (
+        <HorizontalRow
+          title="Reading"
+          icon="▶"
+          iconBg={STATUS_COLORS.reading.color}
+          items={reading}
+          renderItem={renderTile}
+          loading={loading}
+          emptyMsg="Not reading anything right now"
+          seeAllAction={() => setExpandReading(true)}
+        />
+      ) : (
+        <div style={{ marginBottom: 36 }}>
+          <button onClick={() => setExpandReading(false)} style={{
+            display: 'flex', alignItems: 'center', gap: 10, background: 'none', border: 'none',
+            padding: 0, margin: '0 0 14px', cursor: 'pointer', fontFamily: f.sans,
+          }}>
+            <SectionBadge icon="▶" bg={STATUS_COLORS.reading.color} />
+            <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontWeight: 700, fontFamily: f.sans }}>Reading</h2>
+            <CountPill n={reading.length} />
+            <span style={{ color: C.muted, fontSize: 13 }}>‹ collapse</span>
+          </button>
+          {loading ? <Spinner /> : reading.length === 0
+            ? <p style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, fontStyle: 'italic', margin: 0 }}>
+                Not reading anything right now
+              </p>
+            : (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
+                gap: isMobile ? 9 : 16,
+              }}>
+                {reading.map(renderTile)}
+              </div>
+            )
+          }
+        </div>
+      )}
 
-      <HorizontalRow
-        title="Want to Read"
-        icon="👀"
-        iconBg={C.accent}
-        items={wantToRead}
-        renderItem={renderTile}
-        loading={loading}
-        emptyMsg="Nothing on the want-to-read list"
-      />
+      {!expandWantToRead ? (
+        <HorizontalRow
+          title="Want to Read"
+          icon="👀"
+          iconBg={C.accent}
+          items={wantToRead}
+          renderItem={renderTile}
+          loading={loading}
+          emptyMsg="Nothing on the want-to-read list"
+          seeAllAction={() => setExpandWantToRead(true)}
+        />
+      ) : (
+        <div style={{ marginBottom: 36 }}>
+          <button onClick={() => setExpandWantToRead(false)} style={{
+            display: 'flex', alignItems: 'center', gap: 10, background: 'none', border: 'none',
+            padding: 0, margin: '0 0 14px', cursor: 'pointer', fontFamily: f.sans,
+          }}>
+            <SectionBadge icon="👀" bg={C.accent} />
+            <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontWeight: 700, fontFamily: f.sans }}>Want to Read</h2>
+            <CountPill n={wantToRead.length} />
+            <span style={{ color: C.muted, fontSize: 13 }}>‹ collapse</span>
+          </button>
+          {loading ? <Spinner /> : wantToRead.length === 0
+            ? <p style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, fontStyle: 'italic', margin: 0 }}>
+                Nothing on the want-to-read list
+              </p>
+            : (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
+                gap: isMobile ? 9 : 16,
+              }}>
+                {wantToRead.map(renderTile)}
+              </div>
+            )
+          }
+        </div>
+      )}
 
       {/* Read — expands as a full grid, with sort/genre filter — mirrors Home */}
       <div style={{ marginBottom: 36 }}>
@@ -3959,7 +4019,13 @@ function FriendsPage({ userId }) {
                 padding: '12px 0', borderBottom: `1px solid ${C.border}`, gap: 12,
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                  <TasteMatchRing pct={tasteMap[f.friendId] || 0} avatar={f.friendProfile?.avatar_url} />
+                  <button onClick={() => setFriendView(f.friendProfile)}
+                    title="View List" style={{
+                      background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                      lineHeight: 0, borderRadius: '50%',
+                    }}>
+                    <TasteMatchRing pct={tasteMap[f.friendId] || 0} avatar={f.friendProfile?.avatar_url} />
+                  </button>
                   <div>
                     <p style={{ margin: 0, fontWeight: 700, fontSize: 14, color: C.text, fontFamily: f.sans }}>
                       {f.friendProfile?.display_name || f.friendProfile?.username || 'Unknown'}
