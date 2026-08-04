@@ -3,7 +3,7 @@
 // Stack: React + Vite + Supabase + Vercel  (single-file)
 // Dark cinematic theme · Poster grid · Horizontal scroll rows
 // ================================================================
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
 // ─── Supabase client ─────────────────────────────────────────────
@@ -109,7 +109,7 @@ async function searchOpenLibrary(query, maxResults = 20) {
   const url = new URL('https://openlibrary.org/search.json')
   url.searchParams.set('q', query)
   url.searchParams.set('limit', String(maxResults))
-  url.searchParams.set('fields', 'key,title,author_name,cover_i,subject,first_publish_year,number_of_pages_median,isbn')
+  url.searchParams.set('fields', 'key,title,author_name,cover_i,subject,first_publish_year,number_of_pages_median,isbn,publisher')
   const res = await fetch(url.toString())
   if (!res.ok) throw new Error(`Open Library error ${res.status}`)
   const data = await res.json()
@@ -125,6 +125,10 @@ async function searchOpenLibrary(query, maxResults = 20) {
     published_date: doc.first_publish_year ? String(doc.first_publish_year) : '',
     page_count:     doc.number_of_pages_median || null,
     isbn:           doc.isbn?.[0] || null,
+    publisher:      doc.publisher?.[0] || null,
+    subtitle:       null,
+    average_rating: null,
+    ratings_count:  null,
   }))
 }
 
@@ -160,6 +164,10 @@ function parseVolume(item) {
     published_date: v.publishedDate || '',
     page_count:     v.pageCount || null,
     isbn:           v.industryIdentifiers?.find(i => i.type === 'ISBN_13')?.identifier || null,
+    publisher:      v.publisher || null,
+    subtitle:       v.subtitle || null,
+    average_rating: v.averageRating || null,
+    ratings_count:  v.ratingsCount || null,
   }
 }
 
@@ -169,26 +177,181 @@ async function upsertBook(book) {
     description: book.description, cover_url: book.cover_url,
     categories: book.categories, published_date: book.published_date,
     page_count: book.page_count, isbn: book.isbn,
+    publisher: book.publisher || null, subtitle: book.subtitle || null,
+    average_rating: book.average_rating || null, ratings_count: book.ratings_count || null,
   }, { onConflict: 'id' })
   if (error) console.error('upsertBook:', error)
 }
 
 async function addToLibrary(userId, book, status) {
   await upsertBook(book)
-  const { error } = await supabase.from('user_books').upsert({
+  const { data, error } = await supabase.from('user_books').upsert({
     user_id: userId, book_id: book.id, status, position: 0,
-  }, { onConflict: 'user_id,book_id' })
+  }, { onConflict: 'user_id,book_id' }).select().single()
   if (error) throw error
+  return data
 }
 
 // ─── Constants ────────────────────────────────────────────────────
 const STATUS_LABELS = { reading: 'Reading', read: 'Read', want_to_read: 'Want to Read' }
-const STATUS_ICONS  = { reading: '📖', read: '✅', want_to_read: '🔖' }
+const STATUS_ICONS  = { reading: '▶', read: '✅', want_to_read: '👀' }
 const STATUS_COLORS = {
-  reading:      { bg: '#1a3a2a', color: '#34d399' },
-  read:         { bg: '#2a1f3d', color: '#a78bfa' },
-  want_to_read: { bg: '#2a1a0a', color: '#f0b429' },
+  reading:      { bg: '#1a2a3d', color: '#60a5fa' },   // blue
+  read:         { bg: '#1a3a2a', color: '#34d399' },   // green
+  want_to_read: { bg: '#2a1a0a', color: '#f0b429' },   // orange
 }
+
+// Curated stand-ins for NYT-style "Picks" lists — no API key required.
+// Swap these for real NYT Books API lists later if a key is added.
+const PICKS_LISTS = [
+  { key: 'best_of_year',  label: 'Best of the Year',   query: 'best books of the year award winning' },
+  { key: 'summer_reads',  label: 'Summer Reads',       query: 'best summer beach reads fiction' },
+  { key: 'award_winners', label: 'Award Winners',      query: 'pulitzer prize national book award winner' },
+  { key: 'staff_picks',   label: 'Staff Picks',        query: 'must read contemporary fiction acclaimed' },
+]
+
+// Top N most common categories across a set of books (for dynamic genre filter pills)
+// Google Books / Open Library categories are messy BISAC/folksonomy strings
+// ("Business & Economics / Marketing", "health", "juvenile fiction"…). Normalize
+// them down to a small set of high-level genres for filter pills. Ordered from
+// most to least specific — first match wins.
+const GENRE_RULES = [
+  ['true crime',            'True Crime'],
+  ['biography',             'Biography & Memoir'],
+  ['memoir',                'Biography & Memoir'],
+  ['business',              'Business'],
+  ['marketing',             'Business'],
+  ['econom',                'Business'],
+  ['management',            'Business'],
+  ['finance',               'Business'],
+  ['investing',             'Business'],
+  ['health',                'Health & Wellness'],
+  ['fitness',               'Health & Wellness'],
+  ['diet',                  'Health & Wellness'],
+  ['nutrition',             'Health & Wellness'],
+  ['self-help',             'Self-Help'],
+  ['self help',             'Self-Help'],
+  ['personal growth',       'Self-Help'],
+  ['history',               'History'],
+  ['mystery',                'Mystery & Thriller'],
+  ['thriller',              'Mystery & Thriller'],
+  ['crime',                 'Mystery & Thriller'],
+  ['detective',             'Mystery & Thriller'],
+  ['romance',               'Romance'],
+  ['fantasy',               'Fantasy & Sci-Fi'],
+  ['science fiction',       'Fantasy & Sci-Fi'],
+  ['sci-fi',                'Fantasy & Sci-Fi'],
+  ['dystopia',              'Fantasy & Sci-Fi'],
+  ['young adult',           'Young Adult'],
+  ['juvenile',              'Young Adult'],
+  ['children',              "Children's"],
+  ['picture book',          "Children's"],
+  ['poetry',                'Poetry'],
+  ['religio',               'Religion & Spirituality'],
+  ['spiritual',             'Religion & Spirituality'],
+  ['christian',             'Religion & Spirituality'],
+  ['faith',                 'Religion & Spirituality'],
+  ['cook',                  'Cooking & Food'],
+  ['culinary',              'Cooking & Food'],
+  ['travel',                'Travel'],
+  ['art',                   'Art & Design'],
+  ['design',                'Art & Design'],
+  ['photograph',            'Art & Design'],
+  ['comic',                 'Comics & Graphic Novels'],
+  ['graphic novel',         'Comics & Graphic Novels'],
+  ['manga',                 'Comics & Graphic Novels'],
+  ['politic',               'Politics & Current Affairs'],
+  ['current affairs',       'Politics & Current Affairs'],
+  ['government',            'Politics & Current Affairs'],
+  ['science',               'Science & Nature'],
+  ['nature',                'Science & Nature'],
+  ['technology',            'Science & Nature'],
+  ['sport',                 'Sports'],
+  ['humor',                 'Humor'],
+  ['comedy',                'Humor'],
+  ['philosoph',             'Philosophy'],
+  ['literary',              'Literary Fiction'],
+  ['classics',              'Literary Fiction'],
+  ['fiction',               'Fiction'], // generic catch-all — keep last among fiction rules
+]
+
+// Genre labels (from GENRE_RULES above) that count as non-fiction for the
+// Fiction vs Non-Fiction stat breakdown on the Profile tab.
+const NONFICTION_GENRES = new Set([
+  'True Crime', 'Biography & Memoir', 'Business', 'Health & Wellness', 'Self-Help',
+  'History', 'Religion & Spirituality', 'Travel', 'Art & Design',
+  'Politics & Current Affairs', 'Science & Nature', 'Sports', 'Philosophy',
+  'Cooking & Food',
+])
+
+function normalizeGenre(raw) {
+  const s = (raw || '').toLowerCase()
+  for (const [key, label] of GENRE_RULES) {
+    if (s.includes(key)) return label
+  }
+  return null // deliberately unmapped — too niche/unrecognized to show as a filter pill
+}
+
+function bookGenres(book) {
+  const out = new Set()
+  ;(book?.categories || []).forEach(c => {
+    const g = normalizeGenre(c)
+    if (g) out.add(g)
+  })
+  return [...out]
+}
+
+function topCategories(books, n = 8) {
+  const counts = {}
+  books.forEach(b => bookGenres(b).forEach(g => { counts[g] = (counts[g] || 0) + 1 }))
+  return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, n).map(([g]) => g)
+}
+
+// Taste-match % between two readers — genre-overlap (cosine similarity) weighted
+// heaviest, plus a small bonus for books they've both actually shelved.
+function computeTasteMatch(myBooks, friendBooks) {
+  if (!myBooks?.length || !friendBooks?.length) return 0
+  const genreCounts = (list) => {
+    const counts = {}
+    list.forEach(ub => bookGenres(ub.books).forEach(g => { counts[g] = (counts[g] || 0) + 1 }))
+    return counts
+  }
+  const mine   = genreCounts(myBooks)
+  const theirs = genreCounts(friendBooks)
+  const genres = new Set([...Object.keys(mine), ...Object.keys(theirs)])
+
+  let sim = 0
+  if (genres.size > 0) {
+    let dot = 0, magA = 0, magB = 0
+    genres.forEach(g => {
+      const a = mine[g] || 0, b = theirs[g] || 0
+      dot += a * b; magA += a * a; magB += b * b
+    })
+    if (magA > 0 && magB > 0) sim = dot / (Math.sqrt(magA) * Math.sqrt(magB))
+  }
+
+  const myIds  = new Set(myBooks.map(u => u.book_id))
+  const shared = friendBooks.filter(u => myIds.has(u.book_id)).length
+  const bonus  = Math.min(shared * 3, 20)
+
+  const pct = Math.round(sim * 100 * 0.8 + bonus)
+  return Math.max(0, Math.min(100, pct))
+}
+
+// Discover page filter-tier definitions
+const FRIENDS_FILTERS = [
+  ['all', 'All'],
+  ['reading', `${STATUS_ICONS.reading} Reading`],
+  ['want_to_read', `${STATUS_ICONS.want_to_read} Want to Read`],
+  ['highly_rated', '⭐ Highly Rated'],
+  ['recent', '🕐 Recent'],
+]
+const RECOMMENDED_FILTERS = [
+  ['all', 'All'],
+  ['from_friend', '💌 From a Friend'],
+  ['highly_rated', '⭐ Highly Rated by Friends'],
+]
+const PICKS_FILTERS = [['all', 'All'], ...PICKS_LISTS.map(l => [l.key, l.label])]
 
 const LITERARY_EMOJIS = [
   // Literary / book themed
@@ -291,7 +454,7 @@ function EmptyState({ icon = '📚', message, sub }) {
 // ================================================================
 // PosterCard – book cover tile used everywhere
 // ================================================================
-function PosterCard({ book, userBook, onClick, width = 120, height = 180 }) {
+function PosterCard({ book, userBook, onClick, width = 120, height = 180, quickActions }) {
   const [hovered, setHovered] = useState(false)
   const touchStartRef = useRef(null)
   const cover = book?.cover_url || userBook?.books?.cover_url || null
@@ -356,24 +519,49 @@ function PosterCard({ book, userBook, onClick, width = 120, height = 180 }) {
         }} />
       )}
 
-      {/* Title overlay */}
-      <div style={{
-        position: 'absolute', bottom: 0, left: 0, right: 0, borderRadius: '0 0 8px 8px',
-        background: 'linear-gradient(transparent, rgba(10,8,24,0.95))',
-        padding: '28px 8px 8px',
-        opacity: hovered ? 1 : 0.85,
-        transition: 'opacity 0.18s',
-      }}>
-        <p style={{
-          margin: '0 0 2px', fontSize: 11, fontWeight: 700, color: C.white,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          fontFamily: f.sans,
-        }}>{title}</p>
-        <p style={{
-          margin: 0, fontSize: 10, color: 'rgba(255,255,255,0.6)', fontFamily: f.sans,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{authors.slice(0,1).join(', ')}</p>
-      </div>
+      {/* Quick-action icons — pinned on the tile, replaces title text for shelf tiles */}
+      {quickActions?.length > 0 ? (
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0, borderRadius: '0 0 8px 8px',
+          background: 'linear-gradient(transparent, rgba(10,8,24,0.85))',
+          padding: '20px 6px 8px',
+          display: 'flex', justifyContent: 'center', gap: 8,
+        }}>
+          {quickActions.map((a, i) => (
+            <button key={i} title={a.title}
+              onClick={(e) => { e.stopPropagation(); a.onClick() }}
+              style={{
+                width: 30, height: 30, borderRadius: '50%', border: 'none',
+                background: a.bg, color: a.fg || '#0f1117', cursor: 'pointer',
+                fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.5)', flexShrink: 0,
+                WebkitTapHighlightColor: 'transparent',
+              }}>
+              {a.icon}
+            </button>
+          ))}
+        </div>
+      ) : (
+        /* Title overlay — hidden until hover when there's cover art; always shown on no-cover (purple) tiles */
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0, borderRadius: '0 0 8px 8px',
+          background: 'linear-gradient(transparent, rgba(10,8,24,0.95))',
+          padding: '28px 8px 8px',
+          opacity: (hovered || !cover) ? 1 : 0,
+          transition: 'opacity 0.18s',
+          pointerEvents: 'none',
+        }}>
+          <p style={{
+            margin: '0 0 2px', fontSize: 11, fontWeight: 700, color: C.white,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            fontFamily: f.sans,
+          }}>{title}</p>
+          <p style={{
+            margin: 0, fontSize: 10, color: 'rgba(255,255,255,0.6)', fontFamily: f.sans,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{authors.slice(0,1).join(', ')}</p>
+        </div>
+      )}
     </div>
   )
 }
@@ -382,10 +570,11 @@ function PosterCard({ book, userBook, onClick, width = 120, height = 180 }) {
 // SearchResultCard – poster + quick-add buttons for search
 // ================================================================
 function SearchResultCard({ book, userId, myBookIds, onAdded, onOpenModal }) {
+  const [hovered, setHovered] = useState(false)
   const [adding,  setAdding]  = useState(null)
   const [added,   setAdded]   = useState(null)
   const [showRatingPopup, setShowRatingPopup] = useState(false)
-  const isInLibrary = myBookIds?.has(book.id)
+  const isInLibrary = myBookIds?.has(book.id) || !!added
 
   async function handleAdd(status) {
     setAdding(status)
@@ -408,37 +597,168 @@ function SearchResultCard({ book, userId, myBookIds, onAdded, onOpenModal }) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div style={{ position: 'relative' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}>
       {showRatingPopup && (
         <RatingPopup title={book.title} onRate={handleRated} onSkip={() => setShowRatingPopup(false)} />
       )}
       <PosterCard book={book} onClick={onOpenModal} />
-      {isInLibrary || added ? (
-        <div style={{
-          background: STATUS_COLORS[added || 'read']?.bg || C.surface2,
-          borderRadius: 6, padding: '5px 4px', textAlign: 'center',
-          fontSize: 10, fontFamily: f.sans, fontWeight: 700,
-          color: STATUS_COLORS[added || 'read']?.color || C.success,
+
+      {/* Hover overlay — icons only for books not already on any shelf */}
+      {hovered && (
+        <div onClick={onOpenModal} style={{
+          position: 'absolute', inset: 0, borderRadius: 8,
+          background: 'rgba(10,8,24,0.72)',
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'flex-end',
+          paddingBottom: 14,
         }}>
-          {STATUS_ICONS[added]} {STATUS_LABELS[added] || 'In Library'}
+          {isInLibrary ? (
+            <div onClick={onOpenModal} style={{
+              background: STATUS_COLORS[added]?.bg || 'rgba(52,211,153,0.15)', borderRadius: 6,
+              padding: '4px 10px', fontSize: 11, color: STATUS_COLORS[added]?.color || C.success,
+              fontFamily: f.sans, fontWeight: 700, cursor: 'pointer',
+            }}>
+              {STATUS_ICONS[added]} {STATUS_LABELS[added] || 'In library'}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 10 }} onClick={e => e.stopPropagation()}>
+              {Object.entries(STATUS_LABELS).map(([key, lbl]) => (
+                <button key={key} title={lbl} disabled={!!adding}
+                  onClick={() => handleAdd(key)}
+                  style={{
+                    width: 32, height: 32, borderRadius: '50%', border: 'none',
+                    background: STATUS_COLORS[key]?.color || C.primary,
+                    color: '#0f1117',
+                    cursor: adding ? 'not-allowed' : 'pointer', fontSize: 14,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
+                    opacity: adding && adding !== key ? 0.5 : 1,
+                    transition: 'transform 0.1s, opacity 0.1s',
+                    transform: adding === key ? 'scale(0.9)' : 'scale(1)',
+                  }}>
+                  {adding === key ? '…' : STATUS_ICONS[key]}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {Object.entries(STATUS_LABELS).map(([key, lbl]) => (
-            <button key={key} onClick={() => handleAdd(key)} disabled={!!adding}
-              style={{
-                padding: '5px 4px', borderRadius: 5, border: 'none',
-                cursor: adding ? 'not-allowed' : 'pointer',
-                fontFamily: f.sans, fontSize: 11, fontWeight: 700,
-                background: key === 'want_to_read' ? C.accent
-                  : key === 'reading' ? C.primary : C.success,
-                color: key === 'want_to_read' ? '#0f1117' : C.white,
-                opacity: adding && adding !== key ? 0.5 : 1,
-                transition: 'opacity 0.15s',
-              }}>
-              {adding === key ? '…' : `${STATUS_ICONS[key]} ${lbl}`}
-            </button>
-          ))}
+      )}
+    </div>
+  )
+}
+
+// ================================================================
+// AddTile / SectionBadge / CountPill – WatchList-style row chrome
+// ================================================================
+function AddTile({ onClick, label = 'Add', width = 120, height = 180 }) {
+  return (
+    <button onClick={onClick} style={{
+      width, height, flexShrink: 0, borderRadius: 8,
+      border: `2px dashed ${C.border}`, background: 'transparent',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      gap: 6, cursor: 'pointer', color: C.muted, fontFamily: f.sans,
+      WebkitTapHighlightColor: 'transparent',
+    }}>
+      <span style={{ fontSize: 26, lineHeight: 1 }}>+</span>
+      <span style={{ fontSize: 12, fontWeight: 600, textAlign: 'center', padding: '0 6px' }}>{label}</span>
+    </button>
+  )
+}
+
+function SectionBadge({ icon, bg, title }) {
+  const [show, setShow] = useState(false)
+  return (
+    <span
+      onMouseEnter={() => title && setShow(true)}
+      onMouseLeave={() => setShow(false)}
+      style={{
+        position: 'relative',
+        width: 26, height: 26, borderRadius: '50%', background: bg || C.primary,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 13, flexShrink: 0, color: C.white, cursor: title ? 'help' : 'default',
+      }}>
+      {icon}
+      {show && title && (
+        <span style={{
+          position: 'absolute', top: '130%', left: '50%', transform: 'translateX(-50%)',
+          background: C.surface, color: C.text, border: `1px solid ${C.border}`,
+          borderRadius: 8, padding: '9px 12px', fontSize: 12, fontWeight: 500,
+          fontFamily: f.sans, whiteSpace: 'normal', width: 220, textAlign: 'left',
+          lineHeight: 1.4, zIndex: 60, boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
+          pointerEvents: 'none',
+        }}>{title}</span>
+      )}
+    </span>
+  )
+}
+
+// Taste-match ring — circular progress ring around a friend's avatar, filled
+// by reading-taste similarity %, with the % shown in a pill beneath.
+function TasteMatchRing({ pct, avatar, size = 52 }) {
+  const stroke = 3
+  const r = (size - stroke) / 2
+  const c = 2 * Math.PI * r
+  const offset = c * (1 - Math.max(0, Math.min(100, pct)) / 100)
+  const color = pct >= 60 ? C.success : pct >= 35 ? C.accent : C.muted
+  return (
+    <div style={{ position: 'relative', width: size, height: size + 10, flexShrink: 0 }}>
+      <svg width={size} height={size} style={{ position: 'absolute', top: 0, left: 0, transform: 'rotate(-90deg)' }}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={C.border} strokeWidth={stroke} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke}
+          strokeDasharray={c} strokeDashoffset={offset} strokeLinecap="round"
+          style={{ transition: 'stroke-dashoffset 0.4s' }} />
+      </svg>
+      <div style={{
+        position: 'absolute', top: stroke + 2, left: stroke + 2, right: stroke + 2, bottom: stroke + 12,
+        borderRadius: '50%',
+        background: `linear-gradient(135deg, ${C.primaryDim}, ${C.surface2})`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: size * 0.42, border: `2px solid ${C.border}`,
+      }}>{avatar || '👤'}</div>
+      <div style={{
+        position: 'absolute', bottom: 0, left: '50%', transform: 'translateX(-50%)',
+        background: color, color: '#0f1117', fontSize: 10, fontWeight: 800,
+        padding: '1px 6px', borderRadius: 10, fontFamily: f.sans, whiteSpace: 'nowrap',
+      }}>{pct}%</div>
+    </div>
+  )
+}
+
+function CountPill({ n }) {
+  return (
+    <span style={{
+      fontSize: 12, fontWeight: 700, color: C.muted, background: C.surface2,
+      borderRadius: 20, padding: '2px 9px', fontFamily: f.sans,
+    }}>{n}</span>
+  )
+}
+
+// Collapsible accordion row — WatchList-style Friends page sections
+function Accordion({ icon, title, defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div style={{
+      background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10,
+      marginBottom: 12, overflow: 'hidden',
+    }}>
+      <button onClick={() => setOpen(o => !o)} style={{
+        width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        background: 'none', border: 'none', cursor: 'pointer', padding: '16px 18px',
+        fontFamily: f.sans,
+      }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 10, fontWeight: 700, fontSize: 14, color: C.text }}>
+          {icon} {title}
+        </span>
+        <span style={{
+          color: C.muted, fontSize: 12, transition: 'transform 0.15s',
+          transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
+        }}>▾</span>
+      </button>
+      {open && (
+        <div style={{ padding: '0 18px 18px' }}>
+          {children}
         </div>
       )}
     </div>
@@ -448,34 +768,43 @@ function SearchResultCard({ book, userId, myBookIds, onAdded, onOpenModal }) {
 // ================================================================
 // HorizontalRow – scrollable shelf row
 // ================================================================
-function HorizontalRow({ title, items, renderItem, emptyMsg, loading, seeAllAction }) {
+function HorizontalRow({ title, icon, iconBg, items, renderItem, emptyMsg, loading, seeAllAction, onAdd, addLabel = 'Add', rightAction, belowHeader }) {
+  const Header = seeAllAction ? 'button' : 'div'
   return (
     <div style={{ marginBottom: 36 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-        <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontWeight: 700, fontFamily: f.sans }}>
-          {title}
-        </h2>
-        {seeAllAction && items.length > 0 && (
-          <button onClick={seeAllAction} style={{ ...btn('ghost', 'sm'), fontSize: 12 }}>
-            See All →
-          </button>
-        )}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 10, flexWrap: 'wrap' }}>
+        <Header onClick={seeAllAction} style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          background: 'none', border: 'none', padding: 0, margin: 0,
+          cursor: seeAllAction ? 'pointer' : 'default', fontFamily: f.sans,
+        }}>
+          {icon && <SectionBadge icon={icon} bg={iconBg} />}
+          <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontWeight: 700, fontFamily: f.sans }}>
+            {title}
+          </h2>
+          <CountPill n={items.length} />
+          {seeAllAction && <span style={{ color: C.muted, fontSize: 15 }}>›</span>}
+        </Header>
+        {rightAction}
       </div>
-      {loading ? <Spinner /> : items.length === 0
-        ? <p style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, fontStyle: 'italic', margin: 0 }}>
-            {emptyMsg}
-          </p>
-        : (
-          <div style={{
-            display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 8,
-            paddingRight: 20,
-            scrollbarWidth: 'none', msOverflowStyle: 'none',
-            WebkitOverflowScrolling: 'touch',
-          }}>
-            {items.map(renderItem)}
-          </div>
-        )
-      }
+      {belowHeader}
+      {loading ? <Spinner /> : (
+        <div style={{
+          display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 8,
+          paddingRight: 20,
+          scrollbarWidth: 'none', msOverflowStyle: 'none',
+          WebkitOverflowScrolling: 'touch',
+        }}>
+          {onAdd && <AddTile onClick={onAdd} label={addLabel} />}
+          {items.length === 0
+            ? (!onAdd && (
+                <p style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, fontStyle: 'italic', margin: 0 }}>
+                  {emptyMsg}
+                </p>
+              ))
+            : items.map(renderItem)}
+        </div>
+      )}
     </div>
   )
 }
@@ -544,6 +873,30 @@ function RatingPopup({ title, onRate, onSkip }) {
 // ================================================================
 // BookDetailModal – full info overlay
 // ================================================================
+// WatchList-style action box: icon + label, optional badge, used in BookDetailModal
+function ActionBox({ icon, label, badge, active, danger, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      flex: 1, minWidth: 60, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+      padding: '10px 4px', borderRadius: 10, cursor: 'pointer', position: 'relative',
+      background: active ? `${C.primary}22` : C.surface2,
+      border: `1px solid ${danger ? C.danger : active ? C.primary : C.border}`,
+      color: danger ? C.danger : active ? C.primary : C.text,
+      fontFamily: f.sans, WebkitTapHighlightColor: 'transparent',
+    }}>
+      {badge != null && (
+        <span style={{
+          position: 'absolute', top: -7, right: -6, background: C.accent, color: '#0f1117',
+          fontSize: 10, fontWeight: 700, borderRadius: 10, minWidth: 18, height: 18,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px',
+        }}>{badge}</span>
+      )}
+      <span style={{ fontSize: 17 }}>{icon}</span>
+      <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+    </button>
+  )
+}
+
 function BookDetailModal({ item, userId, onClose, onUpdate }) {
   const isMobile = useIsMobile()
   const isLibraryBook = !!item?.user_id
@@ -554,7 +907,7 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
   const [rating,       setRating]       = useState(userBook?.rating || null)
   const [notes,        setNotes]        = useState(userBook?.notes || '')
   const [top10,        setTop10]        = useState(userBook?.top_10 || false)
-  const [adding,       setAdding]       = useState(null)
+  const [userBookId,   setUserBookId]   = useState(userBook?.id || null)
   const [saved,        setSaved]        = useState(false)   // flash checkmark
   const [showRating,   setShowRating]   = useState(false)
   const [following,    setFollowing]    = useState(false)
@@ -562,6 +915,15 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
   const [showTop10Picker, setShowTop10Picker] = useState(false)
   const [existingTop10,   setExistingTop10]   = useState([])
   const [msg,             setMsg]             = useState(null)
+  const [showRatePanel,  setShowRatePanel]  = useState(false)
+  const [showNotesPanel, setShowNotesPanel] = useState(false)
+  const [showSharePanel, setShowSharePanel] = useState(false)
+  const [shareFriends,   setShareFriends]   = useState(null) // null = not loaded yet
+  const [sentTo,         setSentTo]         = useState(new Set())
+  const [friendsWithBook, setFriendsWithBook] = useState([])
+  const [friendsLoaded,   setFriendsLoaded]   = useState(false)
+  const [olDescription,  setOlDescription]  = useState(null)
+  const [authorBio,      setAuthorBio]      = useState(null)
 
   function flashSaved() {
     setSaved(true)
@@ -569,6 +931,34 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
   }
 
   const authors = book?.authors || []
+
+  // Open Library search results never include a description — fetch it lazily on open
+  useEffect(() => {
+    setOlDescription(null)
+    if (book?.description || !book?.id?.startsWith('ol_')) return
+    const workId = book.id.replace(/^ol_/, '')
+    fetch(`https://openlibrary.org/works/${workId}.json`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        const desc = typeof data?.description === 'string' ? data.description : data?.description?.value
+        if (desc) setOlDescription(desc)
+      })
+      .catch(() => {})
+  }, [book?.id])
+
+  // Short author bio via Wikipedia's public summary API — no key required
+  useEffect(() => {
+    setAuthorBio(null)
+    if (!authors[0]) return
+    fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(authors[0])}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.extract && data.type !== 'disambiguation') {
+          setAuthorBio({ extract: data.extract, thumbnail: data.thumbnail?.source })
+        }
+      })
+      .catch(() => {})
+  }, [authors[0]])
 
   useEffect(() => {
     function onKey(e) { if (e.key === 'Escape') onClose() }
@@ -584,28 +974,110 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
       .then(({ data }) => setIsFollowed(!!data))
   }, [authors[0], userId])
 
-  async function handleAddToLibrary(st) {
-    setAdding(st)
-    try {
-      await addToLibrary(userId, book, st)
-      if (st === 'read') {
-        setShowRating(true)
-      } else {
-        setMsg({ type: 'success', text: `Added to ${STATUS_LABELS[st]}!` })
-        onUpdate?.()
-        setTimeout(onClose, 900)
-      }
-    } catch (e) {
-      setMsg({ type: 'error', text: e.message })
-    }
-    setAdding(null)
+  // Friends who have this book on their list
+  useEffect(() => {
+    setFriendsLoaded(false)
+    if (!book?.id || !userId) return
+    supabase.from('friendships')
+      .select('requester_id, addressee_id')
+      .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`)
+      .eq('status', 'accepted')
+      .then(async ({ data: fships }) => {
+        if (!fships?.length) { setFriendsWithBook([]); setFriendsLoaded(true); return }
+        const friendIds = fships.map(f => f.requester_id === userId ? f.addressee_id : f.requester_id)
+        // user_books.user_id references auth.users, not profiles — no FK for PostgREST
+        // to auto-embed, so fetch profiles separately and merge in JS.
+        const [{ data: rows }, { data: profs }] = await Promise.all([
+          supabase.from('user_books').select('status, rating, user_id')
+            .eq('book_id', book.id).in('user_id', friendIds),
+          supabase.from('profiles').select('id, display_name, username, avatar_url').in('id', friendIds),
+        ])
+        const profileMap = Object.fromEntries((profs || []).map(p => [p.id, p]))
+        setFriendsWithBook((rows || []).map(r => ({ ...r, profiles: profileMap[r.user_id] })))
+        setFriendsLoaded(true)
+      })
+  }, [book?.id, userId])
+
+  // Lazy-load friends list the first time the Share panel opens
+  useEffect(() => {
+    if (!showSharePanel || shareFriends !== null) return
+    supabase.from('friendships')
+      .select('requester_id, addressee_id')
+      .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`)
+      .eq('status', 'accepted')
+      .then(async ({ data: fships }) => {
+        if (!fships?.length) { setShareFriends([]); return }
+        const friendIds = fships.map(f => f.requester_id === userId ? f.addressee_id : f.requester_id)
+        const { data: profiles } = await supabase.from('profiles').select('*').in('id', friendIds)
+        setShareFriends(profiles || [])
+      })
+  }, [showSharePanel, shareFriends, userId])
+
+  async function sendToFriend(friendId) {
+    await supabase.from('book_recommendations').insert({
+      from_user_id: userId, to_user_id: friendId, book_id: book.id,
+    })
+    setSentTo(prev => new Set([...prev, friendId]))
+  }
+
+  const friendsSection = (
+    <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 18, marginBottom: 16 }}>
+      <p style={{ margin: '0 0 12px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+        textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Friends</p>
+      {!friendsLoaded ? (
+        <p style={{ margin: 0, fontSize: 13, color: C.muted, fontFamily: f.sans, fontStyle: 'italic' }}>
+          Checking your friends' lists…
+        </p>
+      ) : friendsWithBook.length === 0 ? (
+        <p style={{ margin: 0, fontSize: 13, color: C.muted, fontFamily: f.sans, fontStyle: 'italic' }}>
+          None of your friends have this one yet.
+        </p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {friendsWithBook.map(fb => (
+            <div key={fb.user_id} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                <span style={{
+                  fontSize: 20, width: 34, height: 34, borderRadius: '50%',
+                  background: C.surface2, display: 'flex', alignItems: 'center',
+                  justifyContent: 'center', flexShrink: 0,
+                }}>{fb.profiles?.avatar_url || '📖'}</span>
+                <span style={{
+                  color: C.text, fontFamily: f.sans, fontSize: 14, fontWeight: 600,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}>{fb.profiles?.display_name || fb.profiles?.username}</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                <StatusBadge status={fb.status} />
+                {fb.rating > 0 && <StarRating value={fb.rating} readonly size={13} />}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+
+  // Creates the user_books row on demand (e.g. rating/noting a book you haven't shelved yet)
+  async function ensureEntry(defaultStatus = 'want_to_read') {
+    if (userBookId) return userBookId
+    const row = await addToLibrary(userId, book, defaultStatus)
+    setUserBookId(row.id)
+    setStatus(defaultStatus)
+    onUpdate?.()
+    return row.id
   }
 
   async function handleStatusChange(newStatus) {
-    if (!userBook) return
-    const wasNotRead = userBook.status !== 'read' && newStatus === 'read'
     setStatus(newStatus)
-    await supabase.from('user_books').update({ status: newStatus }).eq('id', userBook.id)
+    if (userBookId) {
+      await supabase.from('user_books').update({ status: newStatus }).eq('id', userBookId)
+    } else {
+      const row = await addToLibrary(userId, book, newStatus)
+      setUserBookId(row.id)
+    }
     onUpdate?.()
     if (newStatus === 'read') {
       setShowRating(true)
@@ -615,27 +1087,28 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
   }
 
   async function handleRatingChange(stars) {
-    if (!userBook) return
     setRating(stars)
-    await supabase.from('user_books').update({ rating: stars }).eq('id', userBook.id)
+    const id = await ensureEntry()
+    await supabase.from('user_books').update({ rating: stars }).eq('id', id)
     onUpdate?.()
     flashSaved()
   }
 
   async function handleNotesSave() {
-    if (!userBook) return
-    await supabase.from('user_books').update({ notes }).eq('id', userBook.id)
+    if (!userBookId && !notes.trim()) return // nothing to save for an unshelved book
+    const id = await ensureEntry()
+    await supabase.from('user_books').update({ notes }).eq('id', id)
     onUpdate?.()
     flashSaved()
   }
 
   async function handleToggleTop10() {
-    if (!userBook) return
+    const id = await ensureEntry()
     if (top10) {
       // Removing from Top 10
       setTop10(false)
       await supabase.from('user_books')
-        .update({ top_10: false }).eq('id', userBook.id)
+        .update({ top_10: false }).eq('id', id)
       onUpdate?.()
       setMsg({ type: 'success', text: 'Removed from Top 10' })
       setTimeout(() => setMsg(null), 2000)
@@ -651,7 +1124,7 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
     } else {
       setTop10(true)
       await supabase.from('user_books')
-        .update({ top_10: true }).eq('id', userBook.id)
+        .update({ top_10: true }).eq('id', id)
       onUpdate?.()
       setMsg({ type: 'success', text: '⭐ Added to Top 10!' })
       setTimeout(() => setMsg(null), 2000)
@@ -662,7 +1135,7 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
     // Remove one, add current
     await supabase.from('user_books').update({ top_10: false }).eq('id', removeId)
     await supabase.from('user_books')
-      .update({ top_10: true }).eq('id', userBook.id)
+      .update({ top_10: true }).eq('id', userBookId)
     setTop10(true)
     setShowTop10Picker(false)
     onUpdate?.()
@@ -671,11 +1144,8 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
   }
 
   async function handleRated(stars) {
-    const target = userBook
-      ? supabase.from('user_books').update({ rating: stars }).eq('id', userBook.id)
-      : supabase.from('user_books').update({ rating: stars })
-          .eq('user_id', userId).eq('book_id', book.id)
-    await target
+    const id = await ensureEntry('read')
+    await supabase.from('user_books').update({ rating: stars }).eq('id', id)
     setRating(stars)
     setShowRating(false)
     onUpdate?.()
@@ -696,8 +1166,11 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
   }
 
   async function handleRemove() {
-    if (!userBook) return
-    await supabase.from('user_books').delete().eq('id', userBook.id)
+    if (!userBookId) { onClose(); return }
+    await supabase.from('user_books').delete().eq('id', userBookId)
+    setUserBookId(null)
+    setStatus('')
+    setTop10(false)
     onUpdate?.()
     onClose()
   }
@@ -812,10 +1285,15 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
 
           {/* Info */}
           <div style={{ flex: 1, minWidth: 0 }}>
-            <h2 style={{ margin: '0 0 6px', color: C.text, fontSize: 20, fontFamily: f.serif,
+            <h2 style={{ margin: '0 0 4px', color: C.text, fontSize: 20, fontFamily: f.serif,
               fontWeight: 700, lineHeight: 1.2 }}>
               {book.title}
             </h2>
+            {book.subtitle && (
+              <p style={{ margin: '0 0 6px', color: C.muted, fontFamily: f.sans, fontSize: 13, fontStyle: 'italic' }}>
+                {book.subtitle}
+              </p>
+            )}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
               <p style={{ margin: 0, color: C.muted, fontFamily: f.sans, fontSize: 14 }}>
                 {book.authors?.join(', ')}
@@ -828,99 +1306,149 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
                 </button>
               )}
             </div>
+            {book.average_rating > 0 && (
+              <p style={{ margin: '0 0 6px', fontSize: 12, color: C.accent, fontFamily: f.sans, fontWeight: 700 }}>
+                ★ {book.average_rating.toFixed?.(1) ?? book.average_rating}
+                {book.ratings_count > 0 && (
+                  <span style={{ color: C.muted, fontWeight: 400 }}> · {book.ratings_count.toLocaleString()} ratings</span>
+                )}
+              </p>
+            )}
             {book.categories?.length > 0 && (
-              <p style={{ margin: '0 0 10px', fontSize: 12, color: C.primary, fontFamily: f.sans }}>
+              <p style={{ margin: '0 0 6px', fontSize: 12, color: C.primary, fontFamily: f.sans }}>
                 {book.categories.slice(0,3).join(' · ')}
               </p>
             )}
-            {book.page_count && (
+            {(book.page_count || book.publisher || book.isbn) && (
               <p style={{ margin: '0 0 10px', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
-                {book.page_count} pages
+                {[book.publisher, book.page_count ? `${book.page_count} pages` : null, book.isbn ? `ISBN ${book.isbn}` : null]
+                  .filter(Boolean).join(' · ')}
               </p>
             )}
-            {book.description && (
+            {(book.description || olDescription) && (
               <p style={{
                 margin: 0, fontSize: 13, color: C.muted, fontFamily: f.sans, lineHeight: 1.5,
                 display: '-webkit-box', WebkitLineClamp: 4,
                 WebkitBoxOrient: 'vertical', overflow: 'hidden',
-              }}>{book.description}</p>
+              }}>{book.description || olDescription}</p>
             )}
           </div>
         </div>
 
-        {/* In library: status / rating / notes */}
-        {isLibraryBook && (
-          <>
-            <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 18, marginBottom: 16 }}>
-              <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
-                textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Status</p>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {Object.entries(STATUS_LABELS).map(([key, lbl]) => (
-                  <button key={key} onClick={() => handleStatusChange(key)}
-                    style={{ ...pill(status === key), fontSize: 12 }}>
-                    {STATUS_ICONS[key]} {lbl}
-                  </button>
-                ))}
-              </div>
+        {authorBio && (
+          <div style={{
+            display: 'flex', gap: 12, alignItems: 'flex-start',
+            marginBottom: 18, paddingBottom: 18, borderBottom: `1px solid ${C.border}`,
+          }}>
+            {authorBio.thumbnail && (
+              <img src={authorBio.thumbnail} alt={authors[0]}
+                style={{ width: 48, height: 48, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
+            )}
+            <div style={{ minWidth: 0 }}>
+              <p style={{ margin: '0 0 4px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+                textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>
+                About {authors[0]}
+              </p>
+              <p style={{
+                margin: 0, fontSize: 13, color: C.muted, fontFamily: f.sans, lineHeight: 1.5,
+                display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+              }}>{authorBio.extract}</p>
             </div>
-
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                <p style={{ margin: 0, fontSize: 11, color: C.muted, fontFamily: f.sans,
-                  textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>My Rating</p>
-                {saved && <span style={{ fontSize: 11, color: C.success, fontFamily: f.sans }}>✓ Saved</span>}
-              </div>
-              <StarRating value={rating} onChange={handleRatingChange} size={24} />
-            </div>
-
-            <div style={{ marginBottom: 20 }}>
-              <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
-                textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Notes</p>
-              <textarea value={notes} onChange={e => setNotes(e.target.value)}
-                onBlur={handleNotesSave}
-                placeholder="Your thoughts, quotes, reflections…"
-                style={{ ...inputStyle, height: 80, resize: 'vertical', fontSize: 13 }} />
-            </div>
-
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-              <button onClick={handleToggleTop10}
-                style={{
-                  ...btn(top10 ? 'accent' : 'ghost', 'sm'),
-                  borderColor: top10 ? C.accent : C.border,
-                }}>
-                {top10 ? '⭐ In Top 10' : '☆ Add to Top 10'}
-              </button>
-              <button onClick={handleRemove} style={btn('danger', 'sm')}>
-                Remove
-              </button>
-            </div>
-          </>
-        )}
-
-        {/* Not in library: add buttons */}
-        {!isLibraryBook && (
-          <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 18 }}>
-            {msg
-              ? <p style={{ margin: 0, fontSize: 14, fontFamily: f.sans, color: C.success }}>{msg.text}</p>
-              : (
-                <div>
-                  <p style={{ margin: '0 0 10px', fontSize: 13, color: C.muted, fontFamily: f.sans }}>
-                    Add to your library:
-                  </p>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    {Object.entries(STATUS_LABELS).map(([key, lbl]) => (
-                      <button key={key} onClick={() => handleAddToLibrary(key)}
-                        disabled={!!adding}
-                        style={btn(key === 'want_to_read' ? 'accent' : 'primary', 'sm')}>
-                        {adding === key ? 'Adding…' : `${STATUS_ICONS[key]} ${lbl}`}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )
-            }
           </div>
         )}
+
+        {/* Status / Action row / Friends — same for every book, shelved or not */}
+        <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 18, marginBottom: 16 }}>
+          <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+            textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Status</p>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {Object.entries(STATUS_LABELS).map(([key, lbl]) => {
+              const active = status === key
+              const sc = STATUS_COLORS[key]
+              return (
+                <button key={key} onClick={() => handleStatusChange(key)}
+                  style={{
+                    cursor: 'pointer', fontFamily: f.sans, fontSize: 14, fontWeight: 700,
+                    padding: '10px 18px', borderRadius: 24, transition: 'all 0.15s',
+                    border: `1px solid ${active ? sc.color : C.border}`,
+                    background: active ? sc.color : C.surface2,
+                    color: active ? '#0f1117' : C.muted,
+                  }}>
+                  {STATUS_ICONS[key]} {lbl}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Action row — WatchList style */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+          <ActionBox icon="⭐" label="Rate" badge={rating || null}
+            active={showRatePanel} onClick={() => setShowRatePanel(o => !o)} />
+          <ActionBox icon="📝" label="Notes"
+            active={showNotesPanel} onClick={() => setShowNotesPanel(o => !o)} />
+          <ActionBox icon="↗" label="Share"
+            active={showSharePanel} onClick={() => setShowSharePanel(o => !o)} />
+          <ActionBox icon={top10 ? '🏆' : '⭐'} label={top10 ? 'Faved' : 'Fave'}
+            active={top10} onClick={handleToggleTop10} />
+          <ActionBox icon="🗑" label="Remove" danger onClick={handleRemove} />
+        </div>
+
+        {msg && (
+          <p style={{ margin: '-6px 0 14px', fontSize: 13, fontFamily: f.sans,
+            color: msg.type === 'error' ? C.danger : C.success }}>{msg.text}</p>
+        )}
+
+        {showRatePanel && (
+          <div style={{ marginBottom: 16, padding: '12px 14px', background: C.surface2, borderRadius: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+              <p style={{ margin: 0, fontSize: 11, color: C.muted, fontFamily: f.sans,
+                textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>My Rating</p>
+              {saved && <span style={{ fontSize: 11, color: C.success, fontFamily: f.sans }}>✓ Saved</span>}
+            </div>
+            <StarRating value={rating} onChange={handleRatingChange} size={24} />
+          </div>
+        )}
+
+        {showNotesPanel && (
+          <div style={{ marginBottom: 16 }}>
+            <textarea value={notes} onChange={e => setNotes(e.target.value)}
+              onBlur={handleNotesSave}
+              placeholder="Your thoughts, quotes, reflections…"
+              style={{ ...inputStyle, height: 80, resize: 'vertical', fontSize: 13 }} />
+          </div>
+        )}
+
+        {showSharePanel && (
+          <div style={{ marginBottom: 16, padding: '12px 14px', background: C.surface2, borderRadius: 10 }}>
+            <p style={{ margin: '0 0 10px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+              textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Send to a friend</p>
+            {shareFriends === null ? <Spinner /> : shareFriends.length === 0 ? (
+              <p style={{ margin: 0, fontSize: 13, color: C.muted, fontFamily: f.sans, fontStyle: 'italic' }}>
+                Add friends to share books with them.
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {shareFriends.map(p => (
+                  <div key={p.id} style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '6px 0',
+                  }}>
+                    <span style={{ color: C.text, fontFamily: f.sans, fontSize: 13, fontWeight: 600 }}>
+                      {p.avatar_url} {p.display_name || p.username}
+                    </span>
+                    {sentTo.has(p.id)
+                      ? <span style={{ fontSize: 12, color: C.success, fontFamily: f.sans, fontWeight: 700 }}>✓ Sent</span>
+                      : <button onClick={() => sendToFriend(p.id)} style={btn('ghost', 'sm')}>Send</button>
+                    }
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {friendsSection}
       </div>
     </div>
     </>
@@ -1097,7 +1625,7 @@ function AuthPage({ inviteFrom }) {
 // ================================================================
 // RecoCard – poster with WatchList-style hover quick-add circles
 // ================================================================
-function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal }) {
+function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal, caption }) {
   const [hovered,  setHovered]  = useState(false)
   const [adding,   setAdding]   = useState(null)
   const [added,    setAdded]    = useState(null)
@@ -1152,17 +1680,18 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal }) 
         }}>
           {inLibrary ? (
             <div style={{
-              background: 'rgba(52,211,153,0.15)', borderRadius: 6,
-              padding: '4px 10px', fontSize: 11, color: C.success,
+              background: STATUS_COLORS[added]?.bg || 'rgba(52,211,153,0.15)', borderRadius: 6,
+              padding: '4px 10px', fontSize: 11, color: STATUS_COLORS[added]?.color || C.success,
               fontFamily: f.sans, fontWeight: 700,
             }}>
               {STATUS_ICONS[added]} {STATUS_LABELS[added] || 'In library'}
             </div>
           ) : (
-            <div style={{ display: 'flex', gap: 10 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
               {[
-                { st: 'want_to_read', icon: '🔖', bg: C.accent,   fg: '#0f1117', label: 'Want to Read',  dismiss: false },
-                { st: 'read',         icon: '✅', bg: C.success,  fg: C.white,   label: 'Read',          dismiss: false },
+                { st: 'reading',      icon: STATUS_ICONS.reading,      bg: STATUS_COLORS.reading.color,      fg: '#0f1117', label: 'Reading',      dismiss: false },
+                { st: 'want_to_read', icon: STATUS_ICONS.want_to_read, bg: STATUS_COLORS.want_to_read.color, fg: '#0f1117', label: 'Want to Read', dismiss: false },
+                { st: 'read',         icon: STATUS_ICONS.read,         bg: STATUS_COLORS.read.color,         fg: '#0f1117', label: 'Read',         dismiss: false },
                 { st: 'not_for_me',   icon: '✕',  bg: '#3d1f1f',  fg: '#ff7070', label: 'Not for Me',    dismiss: true  },
               ].map(({ st, icon, bg, fg, label, dismiss }) => (
                 <button key={st}
@@ -1170,9 +1699,9 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal }) 
                   title={label}
                   disabled={!!adding}
                   style={{
-                    width: 32, height: 32, borderRadius: '50%',
+                    width: 30, height: 30, borderRadius: '50%',
                     background: bg, border: 'none', cursor: adding ? 'not-allowed' : 'pointer',
-                    fontSize: dismiss ? 12 : 14,
+                    fontSize: dismiss ? 12 : 13,
                     fontWeight: dismiss ? 700 : 'normal',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
@@ -1188,96 +1717,493 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal }) 
           )}
         </div>
       )}
+      {caption && (
+        <p style={{
+          margin: '6px 0 0', fontSize: 11, color: C.muted, fontFamily: f.sans,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120,
+        }}>{caption}</p>
+      )}
     </div>
   )
 }
 
 // ================================================================
-// Home page – rows + inline search
+// FriendBookCard – a book on a friend's shelf, with quick-add if you don't have it
 // ================================================================
-function HomePage({ userId, setView }) {
-  const [searchQ,      setSearchQ]      = useState('')
-  const [searchRes,    setSearchRes]    = useState([])
-  const [searching,    setSearching]    = useState(false)
-  const [searchErr,    setSearchErr]    = useState(null)
-  const [searchSource, setSearchSource] = useState(null)
+function FriendBookCard({ ub, profile, userId, myBookIds, onAdded, onOpenModal }) {
+  const [hovered, setHovered] = useState(false)
+  const [adding,  setAdding]  = useState(null)
+  const [added,   setAdded]   = useState(null)
+  const book = ub.books || {}
+  const inLibrary = myBookIds?.has(book.id) || !!added
 
-  const [myBooks,      setMyBooks]      = useState([])
-  const [friendBooks,  setFriendBooks]  = useState([])
-  const [friendProfiles, setFriendProfiles] = useState({})
-  const [genreRecs,    setGenreRecs]    = useState([])
-  const [authorRecs,   setAuthorRecs]   = useState([])
-  const [recentlyRead, setRecentlyRead] = useState([])
-  const [loadingData,  setLoadingData]  = useState(true)
-  const [myBookIds,    setMyBookIds]    = useState(new Set())
-  const [dismissedRecs, setDismissedRecs] = useState(new Set())
+  async function handleAdd(status) {
+    setAdding(status)
+    try {
+      await addToLibrary(userId, book, status)
+      setAdded(status)
+      onAdded?.(book.id)
+    } catch (e) { alert(e.message) }
+    setAdding(null)
+  }
 
-  const [modal,        setModal]        = useState(null)
+  return (
+    <div style={{ flexShrink: 0, width: 120 }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}>
+      <div style={{ position: 'relative' }}>
+        <PosterCard userBook={ub} onClick={onOpenModal} />
+        {hovered && !inLibrary && (
+          <div onClick={onOpenModal} style={{
+            position: 'absolute', inset: 0, borderRadius: 8,
+            background: 'rgba(10,8,24,0.72)',
+            display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+            flexDirection: 'column', paddingBottom: 14,
+          }}>
+            <div style={{ display: 'flex', gap: 8 }} onClick={e => e.stopPropagation()}>
+              {Object.entries(STATUS_LABELS).map(([key, lbl]) => (
+                <button key={key} title={lbl} disabled={!!adding}
+                  onClick={() => handleAdd(key)}
+                  style={{
+                    width: 28, height: 28, borderRadius: '50%', border: 'none',
+                    background: STATUS_COLORS[key]?.color, color: '#0f1117',
+                    cursor: adding ? 'not-allowed' : 'pointer', fontSize: 12,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    opacity: adding && adding !== key ? 0.5 : 1,
+                  }}>
+                  {adding === key ? '…' : STATUS_ICONS[key]}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+      <p style={{
+        margin: '6px 0 0', fontSize: 11, color: C.muted, fontFamily: f.sans,
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      }}>
+        {profile?.avatar_url} {profile?.display_name || profile?.username || 'Friend'}
+      </p>
+    </div>
+  )
+}
+
+// ================================================================
+// AddBookModal – quick-add: list rows with reading/want-to-read icons
+// ================================================================
+function AddBookModal({ userId, defaultStatus = null, onClose, onAdded, onOpenModal }) {
+  const isMobile = useIsMobile()
+  const [query,      setQuery]      = useState('')
+  const [results,    setResults]    = useState([])
+  const [searching,  setSearching]  = useState(false)
+  const [err,        setErr]        = useState(null)
+  const [addingKey,  setAddingKey]  = useState(null) // `${bookId}:${status}`
+  const [myBookStatus, setMyBookStatus] = useState(new Map())
   const debounceRef = useRef(null)
+
+  useEffect(() => {
+    supabase.from('user_books').select('book_id, status').eq('user_id', userId)
+      .then(({ data }) => setMyBookStatus(new Map((data || []).map(r => [r.book_id, r.status]))))
+  }, [userId])
+
+  useEffect(() => {
+    if (!query.trim()) { setResults([]); setErr(null); return }
+    clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(async () => {
+      setSearching(true)
+      setErr(null)
+      try {
+        const { results } = await searchBooks(query, 20)
+        setResults(results)
+      } catch (e) {
+        setErr(e.message)
+        setResults([])
+      }
+      setSearching(false)
+    }, 380)
+    return () => clearTimeout(debounceRef.current)
+  }, [query])
+
+  async function handleAdd(book, status) {
+    const key = `${book.id}:${status}`
+    setAddingKey(key)
+    try {
+      await addToLibrary(userId, book, status)
+      setMyBookStatus(prev => new Map(prev).set(book.id, status))
+      onAdded?.()
+    } catch (e) { alert(e.message) }
+    setAddingKey(null)
+  }
+
+  async function openDetail(book) {
+    const currentStatus = myBookStatus.get(book.id)
+    if (currentStatus) {
+      const { data } = await supabase.from('user_books').select('*, books(*)')
+        .eq('user_id', userId).eq('book_id', book.id).maybeSingle()
+      if (data) onOpenModal?.({ type: 'library', userBook: data })
+    } else {
+      onOpenModal?.({ type: 'search', book })
+    }
+  }
+
+  const single = !!defaultStatus
+  const actionIcon = single ? STATUS_ICONS[defaultStatus] : null
+  const actionBg   = single ? STATUS_COLORS[defaultStatus]?.color : null
+  const actionFg   = single ? '#0f1117' : null
+  const actionLabel = single ? STATUS_LABELS[defaultStatus] : null
+
+  return (
+    <div onClick={e => e.target === e.currentTarget && onClose()}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1200,
+        background: 'rgba(5,4,15,0.92)', backdropFilter: 'blur(6px)',
+        display: 'flex', alignItems: isMobile ? 'flex-end' : 'center',
+        justifyContent: 'center', padding: isMobile ? 0 : 20,
+      }}>
+      <div style={{
+        background: C.surface, width: '100%',
+        maxWidth: isMobile ? '100%' : 480,
+        maxHeight: isMobile ? '85vh' : '80vh',
+        borderRadius: isMobile ? '16px 16px 0 0' : 14,
+        padding: isMobile ? '18px 14px 24px' : 24,
+        overflowY: 'auto', border: `1px solid ${C.border}`,
+        boxShadow: '0 24px 80px rgba(0,0,0,0.7)', position: 'relative',
+        display: 'flex', flexDirection: 'column',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <h2 style={{ margin: 0, color: C.text, fontFamily: f.serif, fontSize: 19 }}>
+            {single ? <>{actionIcon} Add to {actionLabel}</> : <>📚 Add a Book</>}
+          </h2>
+          <button onClick={onClose} style={{
+            background: C.surface2, border: 'none', color: C.muted,
+            borderRadius: '50%', width: 28, height: 28, cursor: 'pointer',
+            fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>×</button>
+        </div>
+
+        <input
+          autoFocus
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="🔍  Search by title, author, or ISBN…"
+          style={{ ...inputStyle, marginBottom: 14, flexShrink: 0 }}
+        />
+
+        <div style={{ overflowY: 'auto' }}>
+          {searching ? <Spinner /> : err ? (
+            <p style={{ color: C.danger, fontFamily: f.sans, fontSize: 13 }}>{err}</p>
+          ) : results.length === 0 ? (
+            <p style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, fontStyle: 'italic', textAlign: 'center', padding: '20px 0' }}>
+              {query.trim() ? 'No results found' : 'Start typing to search'}
+            </p>
+          ) : results.map(book => {
+            const currentStatus = myBookStatus.get(book.id)
+            const alreadyOnTarget = single && currentStatus === defaultStatus
+            return (
+              <div key={book.id} onClick={() => openDetail(book)} style={{
+                display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer',
+                padding: '10px 0', borderBottom: `1px solid ${C.border}`,
+              }}>
+                {book.cover_url
+                  ? <img src={book.cover_url} alt="" style={{ width: 40, height: 60, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />
+                  : <NoCover title={book.title} width={40} height={60} />
+                }
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{
+                    margin: '0 0 2px', fontWeight: 700, fontSize: 13, color: C.text, fontFamily: f.sans,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>{book.title}</p>
+                  <p style={{
+                    margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>{book.authors?.join(', ')}</p>
+                  {currentStatus && !alreadyOnTarget && (
+                    <p style={{ margin: '2px 0 0', fontSize: 10, color: C.muted, fontFamily: f.sans }}>
+                      {STATUS_ICONS[currentStatus]} Currently {STATUS_LABELS[currentStatus]}
+                    </p>
+                  )}
+                </div>
+                {single ? (
+                  alreadyOnTarget ? (
+                    <span style={{ fontSize: 11, color: C.success, fontFamily: f.sans, fontWeight: 700, flexShrink: 0 }}>
+                      ✓ In library
+                    </span>
+                  ) : (
+                    <button title={currentStatus ? `Move to ${actionLabel}` : actionLabel}
+                      onClick={e => { e.stopPropagation(); handleAdd(book, defaultStatus) }}
+                      disabled={!!addingKey}
+                      style={{
+                        width: 32, height: 32, borderRadius: '50%', border: 'none', flexShrink: 0,
+                        background: actionBg, color: actionFg, cursor: 'pointer', fontSize: 14,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        opacity: addingKey && addingKey !== `${book.id}:${defaultStatus}` ? 0.5 : 1,
+                      }}>
+                      {addingKey === `${book.id}:${defaultStatus}` ? '…' : actionIcon}
+                    </button>
+                  )
+                ) : (
+                  <div onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    {Object.entries(STATUS_LABELS).map(([key, lbl]) => {
+                      const on = currentStatus === key
+                      const key2 = `${book.id}:${key}`
+                      return (
+                        <button key={key} title={on ? `${lbl} (current)` : `Move to ${lbl}`}
+                          onClick={() => handleAdd(book, key)}
+                          disabled={!!addingKey}
+                          style={{
+                            width: 28, height: 28, borderRadius: '50%', border: 'none', cursor: 'pointer',
+                            background: on ? C.success : STATUS_COLORS[key]?.bg || C.surface2,
+                            color: on ? C.white : STATUS_COLORS[key]?.color || C.text,
+                            fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            opacity: addingKey && addingKey !== key2 ? 0.5 : 1,
+                          }}>
+                          {addingKey === key2 ? '…' : on ? '✓' : STATUS_ICONS[key]}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
+// Home page – WatchList-style: just your own shelves
+// ================================================================
+const READ_SORTS = [
+  ['default',   'Default'],
+  ['top_rated', 'Top Rated'],
+  ['recent',    'Recent'],
+]
+
+function HomePage({ userId, onOpenList }) {
+  const [myBooks,      setMyBooks]      = useState([])
+  const [loadingData,  setLoadingData]  = useState(true)
+  const [modal,        setModal]        = useState(null)
+  const [showAdd,      setShowAdd]      = useState(null) // null | 'reading' | 'want_to_read'
+  const [dragIdx,      setDragIdx]      = useState(null)
+  const [overIdx,      setOverIdx]      = useState(null)
+  const [showReadFilter, setShowReadFilter] = useState(false)
+  const [readSort,     setReadSort]     = useState('default')
+  const [readGenre,    setReadGenre]    = useState('all')
 
   const loadHomeData = useCallback(async () => {
     setLoadingData(true)
-
-    // My library
     const { data: myLib } = await supabase
       .from('user_books').select('*, books(*)').eq('user_id', userId)
       .order('updated_at', { ascending: false })
-    const lib = myLib || []
-    setMyBooks(lib)
-    const ids = new Set(lib.map(u => u.book_id))
-    setMyBookIds(ids)
-
-    // Friends' books
-    const { data: fships } = await supabase.from('friendships')
-      .select('requester_id, addressee_id')
-      .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`)
-      .eq('status', 'accepted')
-
-    if (fships?.length > 0) {
-      const friendIds = fships.map(f => f.requester_id === userId ? f.addressee_id : f.requester_id)
-      const [{ data: fBooks }, { data: fProfs }] = await Promise.all([
-        supabase.from('user_books').select('*, books(*)').in('user_id', friendIds)
-          .order('updated_at', { ascending: false }).limit(40),
-        supabase.from('profiles').select('id, display_name, username').in('id', friendIds),
-      ])
-      setFriendBooks(fBooks || [])
-      setFriendProfiles(Object.fromEntries((fProfs || []).map(p => [p.id, p])))
-    }
-
-    // Genre recs — show regardless of friends or ratings
-    try {
-      const topRated  = lib.filter(u => (u.rating || 0) >= 4)
-      const booksPool = topRated.length > 0 ? topRated : lib  // fall back to whole library
-      const cats      = [...new Set(booksPool.flatMap(u => u.books?.categories || []))]
-      // If library empty, use popular literary genres as seeds
-      const fallback  = ['literary fiction', 'biography', 'history', 'mystery', 'science']
-      const pool      = cats.length > 0 ? cats : fallback
-      const cat       = pool[Math.floor(Math.random() * pool.length)]
-      const { results } = await searchBooks(`subject:"${cat}"`, 12)
-      setGenreRecs(results.filter(b => !ids.has(b.id)).slice(0, 10).map(b => ({ ...b, reason: cat })))
-    } catch (_) { /* optional */ }
-
-    // Recently read
-    setRecentlyRead(lib.filter(u => u.status === 'read'))
-
-    // Author follows
-    try {
-      const { data: follows } = await supabase.from('author_follows')
-        .select('author').eq('user_id', userId)
-      if (follows?.length > 0) {
-        const author = follows[Math.floor(Math.random() * follows.length)].author
-        const { results } = await searchBooks(`inauthor:"${author}"`, 10)
-        setAuthorRecs(results.filter(b => !ids.has(b.id)).slice(0, 8)
-          .map(b => ({ ...b, reason: `More by ${author}` })))
-      }
-    } catch (_) { /* optional */ }
-
+    setMyBooks(myLib || [])
     setLoadingData(false)
   }, [userId])
 
   useEffect(() => { loadHomeData() }, [loadHomeData])
 
-  // Debounced search
+  const reading = myBooks.filter(u => u.status === 'reading')
+  const wantToRead = myBooks.filter(u => u.status === 'want_to_read')
+    .sort((a, b) => (a.position || 0) - (b.position || 0))
+  const readAll = myBooks.filter(u => u.status === 'read')
+  const readGenres = useMemo(() => topCategories(readAll.map(u => u.books || {})), [myBooks])
+  const read = (() => {
+    const list = readGenre === 'all' ? readAll : readAll.filter(u => bookGenres(u.books).includes(readGenre))
+    if (readSort === 'recent') return list // already fetched in updated_at desc order
+    if (readSort === 'top_rated') return [...list].sort((a, b) => (b.rating || 0) - (a.rating || 0))
+    // 'default' — Top 10 picks first, then by rating descending
+    return [...list].sort((a, b) => {
+      if (!!b.top_10 !== !!a.top_10) return b.top_10 ? 1 : -1
+      return (b.rating || 0) - (a.rating || 0)
+    })
+  })()
+
+  const goToList = (filter, locked = false) => () => onOpenList(filter, locked)
+
+  // Drag-to-reorder — Want to Read row, left-to-right priority
+  async function persistOrder(reordered) {
+    setMyBooks(prev => {
+      const others = prev.filter(u => u.status !== 'want_to_read')
+      return [...others, ...reordered]
+    })
+    await Promise.all(
+      reordered.map((ub, idx) => supabase.from('user_books').update({ position: idx }).eq('id', ub.id))
+    )
+  }
+  function onDragStart(e, idx) { setDragIdx(idx); e.dataTransfer.effectAllowed = 'move' }
+  function onDragOver(e, idx)  { e.preventDefault(); if (idx !== overIdx) setOverIdx(idx) }
+  function onDrop(e, idx) {
+    e.preventDefault()
+    if (dragIdx === null || dragIdx === idx) return
+    const arr = wantToRead.slice()
+    const [moved] = arr.splice(dragIdx, 1)
+    arr.splice(idx, 0, moved)
+    setDragIdx(null); setOverIdx(null)
+    persistOrder(arr)
+  }
+
+  return (
+    <div>
+      <HorizontalRow
+        title="Currently Reading"
+        icon="▶"
+        iconBg={STATUS_COLORS.reading.color}
+        items={reading}
+        renderItem={ub => (
+          <PosterCard key={ub.id} userBook={ub}
+            onClick={() => setModal({ type: 'library', userBook: ub })} />
+        )}
+        loading={loadingData}
+        onAdd={() => setShowAdd('reading')}
+        addLabel="Add Book"
+        seeAllAction={goToList('reading', true)}
+      />
+
+      <HorizontalRow
+        title="Want to Read"
+        icon="👀"
+        iconBg={C.accent}
+        items={wantToRead}
+        renderItem={(ub, idx) => (
+          <div key={ub.id}
+            draggable
+            onDragStart={e => onDragStart(e, idx)}
+            onDragOver={e => onDragOver(e, idx)}
+            onDrop={e => onDrop(e, idx)}
+            onDragEnd={() => { setDragIdx(null); setOverIdx(null) }}
+            style={{
+              opacity: dragIdx === idx ? 0.4 : 1,
+              outline: overIdx === idx && dragIdx !== idx ? `2px solid ${C.primary}` : 'none',
+              borderRadius: 10, cursor: 'grab',
+            }}
+          >
+            <PosterCard userBook={ub}
+              onClick={() => setModal({ type: 'library', userBook: ub })} />
+          </div>
+        )}
+        loading={loadingData}
+        onAdd={() => setShowAdd('want_to_read')}
+        addLabel="Add Book"
+        seeAllAction={goToList('want_to_read', true)}
+      />
+      {wantToRead.length > 1 && (
+        <p style={{ margin: '-30px 0 20px', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
+          ⠿ Drag covers to set your priority order
+        </p>
+      )}
+
+      {/* Read — expands as a full grid, not a single scrolling row */}
+      <div style={{ marginBottom: 36 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 10, flexWrap: 'wrap' }}>
+          <button onClick={goToList('read', true)} style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            background: 'none', border: 'none', padding: 0, margin: 0,
+            cursor: 'pointer', fontFamily: f.sans,
+          }}>
+            <SectionBadge icon="✅" bg={C.success} />
+            <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontWeight: 700, fontFamily: f.sans }}>Read</h2>
+            <CountPill n={read.length} />
+            <span style={{ color: C.muted, fontSize: 15 }}>›</span>
+          </button>
+          <button onClick={() => setShowReadFilter(o => !o)} style={{ ...pill(showReadFilter), fontSize: 12 }}>
+            Filter ▾
+          </button>
+        </div>
+
+        {showReadFilter && (
+          <div style={{
+            background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10,
+            padding: 14, marginBottom: 16,
+          }}>
+            <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+              textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Sort</p>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: readGenres.length > 0 ? 14 : 0 }}>
+              {READ_SORTS.map(([key, lbl]) => (
+                <button key={key} onClick={() => setReadSort(key)} style={pill(readSort === key)}>
+                  {lbl}
+                </button>
+              ))}
+            </div>
+            {readGenres.length > 0 && (
+              <>
+                <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+                  textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Genre</p>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button onClick={() => setReadGenre('all')} style={{ ...pill(readGenre === 'all'), fontSize: 12 }}>
+                    All
+                  </button>
+                  {readGenres.map(g => (
+                    <button key={g} onClick={() => setReadGenre(g)} style={{ ...pill(readGenre === g), fontSize: 12 }}>
+                      {g}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {loadingData ? <Spinner /> : read.length === 0
+          ? <p style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, fontStyle: 'italic', margin: 0 }}>
+              Books you finish will show up here
+            </p>
+          : (
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
+              gap: 16,
+            }}>
+              {read.map(ub => (
+                <PosterCard key={ub.id} userBook={ub}
+                  onClick={() => setModal({ type: 'library', userBook: ub })} />
+              ))}
+            </div>
+          )
+        }
+      </div>
+
+      {/* Detail modal */}
+      {modal && (
+        <BookDetailModal
+          item={modal.type === 'library' ? modal.userBook : (modal.book || modal.userBook?.books)}
+          userId={userId}
+          onClose={() => setModal(null)}
+          onUpdate={() => loadHomeData()}
+        />
+      )}
+
+      {showAdd && (
+        <AddBookModal
+          userId={userId}
+          defaultStatus={showAdd}
+          onClose={() => setShowAdd(null)}
+          onAdded={loadHomeData}
+          onOpenModal={(item) => { setShowAdd(null); setModal(item) }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ================================================================
+// Search page – dedicated search tab
+// ================================================================
+function SearchPage({ userId }) {
+  const [searchQ,      setSearchQ]      = useState('')
+  const [searchRes,    setSearchRes]    = useState([])
+  const [searching,    setSearching]    = useState(false)
+  const [searchErr,    setSearchErr]    = useState(null)
+  const [searchSource, setSearchSource] = useState(null)
+  const [myBookIds,    setMyBookIds]    = useState(new Set())
+  const [modal,        setModal]        = useState(null)
+  const debounceRef = useRef(null)
+
+  useEffect(() => {
+    supabase.from('user_books').select('book_id').eq('user_id', userId)
+      .then(({ data }) => setMyBookIds(new Set((data || []).map(r => r.book_id))))
+  }, [userId])
+
   useEffect(() => {
     if (!searchQ.trim()) { setSearchRes([]); setSearchErr(null); setSearchSource(null); return }
     clearTimeout(debounceRef.current)
@@ -1297,19 +2223,13 @@ function HomePage({ userId, setView }) {
     return () => clearTimeout(debounceRef.current)
   }, [searchQ])
 
-  const reading     = myBooks.filter(u => u.status === 'reading')
-  const wantToRead  = myBooks.filter(u => u.status === 'want_to_read')
-  const friendReading = friendBooks.filter(u => u.status === 'reading')
-  const friendWant    = friendBooks.filter(u => u.status === 'want_to_read')
-  const friendFaves   = friendBooks.filter(u => u.status === 'read' && (u.rating || 0) >= 4)
-
   const isSearching = searchQ.trim().length > 0
 
   return (
     <div>
-      {/* Search bar */}
-      <div style={{ marginBottom: 32, position: 'relative' }}>
+      <div style={{ marginBottom: 24, position: 'relative' }}>
         <input
+          autoFocus
           value={searchQ}
           onChange={e => setSearchQ(e.target.value)}
           placeholder="🔍  Search books by title, author, or ISBN…"
@@ -1328,7 +2248,6 @@ function HomePage({ userId, setView }) {
         )}
       </div>
 
-      {/* Search results */}
       {isSearching ? (
         <div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 16 }}>
@@ -1374,135 +2293,405 @@ function HomePage({ userId, setView }) {
           }
         </div>
       ) : (
-        <>
-          <HorizontalRow
-            title="📖 Currently Reading"
-            items={reading}
-            renderItem={ub => (
-              <PosterCard key={ub.id} userBook={ub}
-                onClick={() => setModal({ type: 'library', userBook: ub })} />
-            )}
-            emptyMsg="Nothing in progress — find your next read below"
-            loading={loadingData}
-            seeAllAction={() => setView('mylist')}
-          />
-
-          <HorizontalRow
-            title="🔖 Want to Read"
-            items={wantToRead}
-            renderItem={ub => (
-              <PosterCard key={ub.id} userBook={ub}
-                onClick={() => setModal({ type: 'library', userBook: ub })} />
-            )}
-            emptyMsg="Your reading queue is empty"
-            loading={loadingData}
-            seeAllAction={() => setView('mylist')}
-          />
-
-          <HorizontalRow
-            title="👥 Friends Are Reading"
-            items={friendReading}
-            renderItem={ub => (
-              <div key={ub.id} style={{ flexShrink: 0 }}>
-                <PosterCard userBook={ub}
-                  onClick={() => setModal({ type: 'friendbook', book: ub.books, userBook: ub })} />
-                <p style={{ margin: '4px 0 0', fontSize: 10, color: C.muted, fontFamily: f.sans,
-                  width: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {friendProfiles[ub.user_id]?.display_name || ''}
-                </p>
-              </div>
-            )}
-            emptyMsg="Add friends to see what they're reading"
-            loading={loadingData}
-          />
-
-          <HorizontalRow
-            title="📚 Friends Want to Read"
-            items={friendWant}
-            renderItem={ub => (
-              <div key={ub.id} style={{ flexShrink: 0 }}>
-                <PosterCard userBook={ub}
-                  onClick={() => setModal({ type: 'friendbook', book: ub.books, userBook: ub })} />
-                <p style={{ margin: '4px 0 0', fontSize: 10, color: C.muted, fontFamily: f.sans,
-                  width: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {friendProfiles[ub.user_id]?.display_name || ''}
-                </p>
-              </div>
-            )}
-            emptyMsg="No friends on the app yet"
-            loading={loadingData}
-          />
-
-          <HorizontalRow
-            title="⭐ Friends' Favorites"
-            items={friendFaves}
-            renderItem={ub => (
-              <div key={ub.id} style={{ flexShrink: 0 }}>
-                <PosterCard userBook={ub}
-                  onClick={() => setModal({ type: 'friendbook', book: ub.books, userBook: ub })} />
-                <p style={{ margin: '4px 0 0', fontSize: 10, color: C.muted, fontFamily: f.sans,
-                  width: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {friendProfiles[ub.user_id]?.display_name || ''}
-                </p>
-              </div>
-            )}
-            emptyMsg="Your friends haven't rated books yet"
-            loading={loadingData}
-          />
-
-          {authorRecs.filter(b => !dismissedRecs.has(b.id)).length > 0 && (
-            <HorizontalRow
-              title="✍️ From Authors You Follow"
-              items={authorRecs.filter(b => !dismissedRecs.has(b.id))}
-              renderItem={book => (
-                <RecoCard key={book.id} book={book} userId={userId}
-                  myBookIds={myBookIds}
-                  onAdded={id => { setMyBookIds(prev => new Set([...prev, id])); loadHomeData() }}
-                  onDismiss={id => setDismissedRecs(prev => new Set([...prev, id]))}
-                  onOpenModal={() => setModal({ type: 'search', book })} />
-              )}
-              emptyMsg=""
-              loading={false}
-            />
-          )}
-
-          <HorizontalRow
-            title="✨ Suggested for You"
-            items={genreRecs.filter(b => !dismissedRecs.has(b.id))}
-            renderItem={book => (
-              <RecoCard key={book.id} book={book} userId={userId}
-                myBookIds={myBookIds}
-                onAdded={id => { setMyBookIds(prev => new Set([...prev, id])); loadHomeData() }}
-                onDismiss={id => setDismissedRecs(prev => new Set([...prev, id]))}
-                onOpenModal={() => setModal({ type: 'search', book })} />
-            )}
-            emptyMsg="Loading recommendations…"
-            loading={loadingData}
-          />
-
-          {recentlyRead.length > 0 && (
-            <HorizontalRow
-              title="✅ Read"
-              items={recentlyRead}
-              renderItem={ub => (
-                <PosterCard key={ub.id} userBook={ub}
-                  onClick={() => setModal({ type: 'library', userBook: ub })} />
-              )}
-              emptyMsg=""
-              loading={false}
-              seeAllAction={() => setView('mylist')}
-            />
-          )}
-        </>
+        <EmptyState icon="🔍" message="Search for a book" sub="Title, author, or ISBN" />
       )}
 
-      {/* Detail modal */}
       {modal && (
         <BookDetailModal
-          item={modal.type === 'library' ? modal.userBook : (modal.book || modal.userBook?.books)}
+          item={modal.book}
           userId={userId}
           onClose={() => setModal(null)}
-          onUpdate={() => { setModal(null); loadHomeData() }}
+          onUpdate={() => {}}
+        />
+      )}
+    </div>
+  )
+}
+
+// ================================================================
+// Discover page helpers – shared header/body/filter-panel chrome
+// ================================================================
+function DiscoverSectionHeader({ icon, iconBg, title, count, onTitleClick, filterOpen, onFilterToggle, tooltip }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 10, flexWrap: 'wrap' }}>
+      <button onClick={onTitleClick} style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        background: 'none', border: 'none', padding: 0, margin: 0,
+        cursor: 'pointer', fontFamily: f.sans,
+      }}>
+        <SectionBadge icon={icon} bg={iconBg} title={tooltip} />
+        <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontWeight: 700, fontFamily: f.sans }}>{title}</h2>
+        <CountPill n={count} />
+        <span style={{ color: C.muted, fontSize: 15 }}>›</span>
+      </button>
+      <button onClick={onFilterToggle} style={{ ...pill(filterOpen), fontSize: 12 }}>Filter ▾</button>
+    </div>
+  )
+}
+
+function DiscoverFilterPanel({ primaryLabel, primaryOptions, primaryValue, onPrimaryChange, genreOptions, genreValue, onGenreChange }) {
+  return (
+    <div style={{
+      background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10,
+      padding: 14, marginBottom: 16,
+    }}>
+      {primaryOptions && (
+        <>
+          <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+            textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>{primaryLabel}</p>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: genreOptions?.length ? 14 : 0 }}>
+            {primaryOptions.map(([key, lbl]) => (
+              <button key={key} onClick={() => onPrimaryChange(key)} style={{ ...pill(primaryValue === key), fontSize: 12 }}>
+                {lbl}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+      {genreOptions?.length > 0 && (
+        <>
+          <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+            textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Genre</p>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button onClick={() => onGenreChange('all')} style={{ ...pill(genreValue === 'all'), fontSize: 12 }}>All</button>
+            {genreOptions.map(g => (
+              <button key={g} onClick={() => onGenreChange(g)} style={{ ...pill(genreValue === g), fontSize: 12 }}>{g}</button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function DiscoverSectionBody({ expanded, loading, items, renderItem, emptyMsg }) {
+  if (loading && !expanded) return <Spinner />
+  if (items.length === 0) {
+    return expanded
+      ? <EmptyState message={emptyMsg} />
+      : <p style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, fontStyle: 'italic', margin: 0 }}>{emptyMsg}</p>
+  }
+  return expanded ? (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 16 }}>
+      {items.map(renderItem)}
+    </div>
+  ) : (
+    <div style={{
+      display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 8, paddingRight: 20,
+      scrollbarWidth: 'none', msOverflowStyle: 'none', WebkitOverflowScrolling: 'touch',
+    }}>
+      {items.map(renderItem)}
+    </div>
+  )
+}
+
+// ================================================================
+// Discover page – Friends / Recommended / Trending / Picks
+// ================================================================
+function DiscoverPage({ userId }) {
+  const [loading,      setLoading]      = useState(true)
+  const [myBookIds,    setMyBookIds]    = useState(new Set())
+  const [dismissedRecs, setDismissedRecs] = useState(new Set())
+  const [modal,        setModal]        = useState(null)
+  const [expanded,     setExpanded]     = useState(null) // null | 'friends' | 'recommended' | 'trending' | 'picks'
+
+  const [friendsFeed, setFriendsFeed] = useState([])
+  const [profileMap,  setProfileMap]  = useState({})
+  const [friendsFilter, setFriendsFilter] = useState('all')
+  const [friendsGenre,  setFriendsGenre]  = useState('all')
+  const [showFriendsFilter, setShowFriendsFilter] = useState(false)
+
+  const [recommended, setRecommended] = useState([])
+  const [recFilter, setRecFilter] = useState('all')
+  const [recGenre,  setRecGenre]  = useState('all')
+  const [showRecFilter, setShowRecFilter] = useState(false)
+
+  const [trending, setTrending] = useState([])
+  const [trendGenre, setTrendGenre] = useState('all')
+  const [showTrendFilter, setShowTrendFilter] = useState(false)
+
+  const [picks, setPicks] = useState([])
+  const [picksFilter, setPicksFilter] = useState('all')
+  const [picksGenre,  setPicksGenre]  = useState('all')
+  const [showPicksFilter, setShowPicksFilter] = useState(false)
+
+  const loadDiscoverData = useCallback(async () => {
+    setLoading(true)
+
+    const { data: myLib } = await supabase.from('user_books').select('*, books(*)').eq('user_id', userId)
+    const lib = myLib || []
+    const ids = new Set(lib.map(u => u.book_id))
+    setMyBookIds(ids)
+
+    // ── Friends' activity ──
+    const { data: fships } = await supabase.from('friendships')
+      .select('requester_id, addressee_id')
+      .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`)
+      .eq('status', 'accepted')
+
+    let friendIds = []
+    let localProfileMap = {}
+    if (fships?.length > 0) {
+      friendIds = fships.map(f => f.requester_id === userId ? f.addressee_id : f.requester_id)
+      const [{ data: acts }, { data: profs }] = await Promise.all([
+        supabase.from('user_books').select('*, books(*)').in('user_id', friendIds)
+          .order('updated_at', { ascending: false }).limit(60),
+        supabase.from('profiles').select('id, display_name, username, avatar_url').in('id', friendIds),
+      ])
+      localProfileMap = Object.fromEntries((profs || []).map(p => [p.id, p]))
+      setFriendsFeed(acts || [])
+      setProfileMap(localProfileMap)
+    } else {
+      setFriendsFeed([])
+      setProfileMap({})
+    }
+
+    // ── Recommended: explicit shares + friends' 5-star reads + a genre-based filler ──
+    const recPool = []
+    const { data: recs } = await supabase.from('book_recommendations').select('*, books(*)')
+      .eq('to_user_id', userId).order('created_at', { ascending: false }).limit(15)
+    if (recs?.length) {
+      const fromIds = [...new Set(recs.map(r => r.from_user_id))]
+      const { data: fromProfs } = await supabase.from('profiles').select('id, display_name, username').in('id', fromIds)
+      const pm = Object.fromEntries((fromProfs || []).map(p => [p.id, p]))
+      recs.forEach(r => {
+        if (!r.books || ids.has(r.book_id)) return
+        recPool.push({
+          ...r.books,
+          reason: `Recommended by ${pm[r.from_user_id]?.display_name || pm[r.from_user_id]?.username || 'a friend'}`,
+          source: 'from_friend',
+        })
+      })
+    }
+    if (friendIds.length > 0) {
+      const { data: topFriendReads } = await supabase.from('user_books').select('*, books(*)')
+        .in('user_id', friendIds).eq('rating', 5).limit(20)
+      ;(topFriendReads || []).forEach(ub => {
+        if (!ub.books || ids.has(ub.book_id) || recPool.some(b => b.id === ub.book_id)) return
+        const p = localProfileMap[ub.user_id]
+        recPool.push({
+          ...ub.books,
+          reason: `${p?.display_name || p?.username || 'A friend'} rated it ★★★★★`,
+          source: 'highly_rated',
+        })
+      })
+    }
+    // Author-follow recs
+    try {
+      const { data: follows } = await supabase.from('author_follows').select('author').eq('user_id', userId)
+      if (follows?.length > 0) {
+        const author = follows[Math.floor(Math.random() * follows.length)].author
+        const { results } = await searchBooks(`inauthor:"${author}"`, 10)
+        results.forEach(b => {
+          if (ids.has(b.id) || recPool.some(r => r.id === b.id)) return
+          recPool.push({ ...b, reason: `More by ${author}`, source: 'genre' })
+        })
+      }
+    } catch (_) { /* optional */ }
+    // Genre-based recs — pull from two categories instead of one for a fuller shelf
+    try {
+      const topRated  = lib.filter(u => (u.rating || 0) >= 4)
+      const booksPool = topRated.length > 0 ? topRated : lib
+      const cats      = [...new Set(booksPool.flatMap(u => u.books?.categories || []))]
+      const fallback  = ['literary fiction', 'biography', 'history', 'mystery', 'science', 'fantasy']
+      const pool      = cats.length > 0 ? cats : fallback
+      const shuffled  = [...pool].sort(() => Math.random() - 0.5)
+      for (const cat of shuffled.slice(0, 2)) {
+        const { results } = await searchBooks(`subject:"${cat}"`, 12)
+        results.forEach(b => {
+          if (ids.has(b.id) || recPool.some(r => r.id === b.id)) return
+          recPool.push({ ...b, reason: `Because you liked ${cat}`, source: 'genre' })
+        })
+      }
+    } catch (_) { /* optional */ }
+    setRecommended(recPool)
+
+    // ── Trending: privacy-safe aggregate across all users (see schema_trending.sql) ──
+    try {
+      const { data: trend, error } = await supabase.rpc('get_trending_books', { days_back: 180, limit_count: 40 })
+      if (!error && trend?.length) {
+        const bookIds = trend.map(t => t.book_id)
+        const { data: trendBooks } = await supabase.from('books').select('*').in('id', bookIds)
+        const bookMap = Object.fromEntries((trendBooks || []).map(b => [b.id, b]))
+        const merged = trend.map(t => ({ ...bookMap[t.book_id], adds: t.adds }))
+          .filter(b => b.id && !ids.has(b.id))
+        if (merged.length > 0) {
+          setTrending(merged)
+        } else {
+          throw new Error('no trending data yet')
+        }
+      } else {
+        throw new Error('trending RPC unavailable')
+      }
+    } catch (_) {
+      // Fallback (e.g. schema_trending.sql not run yet, or too little usage data so far):
+      // surface currently-popular new releases instead of leaving the section empty.
+      try {
+        const { results } = await searchBooks('new york times bestseller 2026', 20)
+        setTrending(results.filter(b => !ids.has(b.id)).map(b => ({ ...b, reason: 'Popular right now' })))
+      } catch (_) { setTrending([]) }
+    }
+
+    // ── Picks: curated stand-in lists (no NYT key needed — see PICKS_LISTS) ──
+    try {
+      const shuffledLists = [...PICKS_LISTS].sort(() => Math.random() - 0.5).slice(0, 2)
+      const picksPool = []
+      for (const list of shuffledLists) {
+        const { results } = await searchBooks(list.query, 12)
+        results.forEach(b => {
+          if (ids.has(b.id) || picksPool.some(p => p.id === b.id)) return
+          picksPool.push({ ...b, reason: list.label, listKey: list.key })
+        })
+      }
+      setPicks(picksPool)
+    } catch (_) { setPicks([]) }
+
+    setLoading(false)
+  }, [userId])
+
+  useEffect(() => { loadDiscoverData() }, [loadDiscoverData])
+
+  function markAdded(id) {
+    setMyBookIds(prev => new Set([...prev, id]))
+  }
+
+  // ── Derived, filtered views ──
+  const friendsGenres = topCategories(friendsFeed.map(ub => ub.books || {}))
+  const friendsVisible = friendsFeed.filter(ub => {
+    if (friendsFilter === 'reading' && ub.status !== 'reading') return false
+    if (friendsFilter === 'want_to_read' && ub.status !== 'want_to_read') return false
+    if (friendsFilter === 'highly_rated' && !((ub.rating || 0) >= 4)) return false
+    if (friendsFilter === 'recent' && (Date.now() - new Date(ub.updated_at)) / 86400000 > 14) return false
+    if (friendsGenre !== 'all' && !bookGenres(ub.books).includes(friendsGenre)) return false
+    return true
+  })
+
+  const recGenres = topCategories(recommended)
+  const recVisible = recommended.filter(b => {
+    if (dismissedRecs.has(b.id)) return false
+    if (recFilter === 'from_friend' && b.source !== 'from_friend') return false
+    if (recFilter === 'highly_rated' && b.source !== 'highly_rated') return false
+    if (recGenre !== 'all' && !bookGenres(b).includes(recGenre)) return false
+    return true
+  })
+
+  const trendGenres = topCategories(trending)
+  const trendVisible = trending.filter(b => {
+    if (dismissedRecs.has(b.id)) return false
+    if (trendGenre !== 'all' && !bookGenres(b).includes(trendGenre)) return false
+    return true
+  })
+
+  const picksGenres = topCategories(picks)
+  const picksVisible = picks.filter(b => {
+    if (dismissedRecs.has(b.id)) return false
+    if (picksFilter !== 'all' && b.listKey !== picksFilter) return false
+    if (picksGenre !== 'all' && !bookGenres(b).includes(picksGenre)) return false
+    return true
+  })
+
+  return (
+    <div>
+      {expanded && (
+        <button onClick={() => setExpanded(null)} style={{
+          background: C.surface2, border: `1px solid ${C.border}`, color: C.muted,
+          borderRadius: 8, padding: '7px 14px', cursor: 'pointer',
+          fontFamily: f.sans, fontSize: 13, fontWeight: 600, marginBottom: 16,
+        }}>← Back to Discover</button>
+      )}
+
+      {(!expanded || expanded === 'friends') && (
+        <div style={{ marginBottom: 36 }}>
+          <DiscoverSectionHeader icon="🍿" iconBg={C.primary} title="Friends" count={friendsVisible.length}
+            onTitleClick={() => setExpanded(expanded === 'friends' ? null : 'friends')}
+            filterOpen={showFriendsFilter} onFilterToggle={() => setShowFriendsFilter(o => !o)}
+            tooltip="Books your friends are reading, want to read, highly rated, and finished recently" />
+          {showFriendsFilter && (
+            <DiscoverFilterPanel primaryLabel="Activity" primaryOptions={FRIENDS_FILTERS}
+              primaryValue={friendsFilter} onPrimaryChange={setFriendsFilter}
+              genreOptions={friendsGenres} genreValue={friendsGenre} onGenreChange={setFriendsGenre} />
+          )}
+          <DiscoverSectionBody expanded={expanded === 'friends'} loading={loading}
+            items={friendsVisible} emptyMsg="Add friends to see what they're reading"
+            renderItem={ub => (
+              <FriendBookCard key={ub.id} ub={ub} profile={profileMap[ub.user_id]} userId={userId}
+                myBookIds={myBookIds} onAdded={markAdded}
+                onOpenModal={() => setModal({ book: ub.books })} />
+            )} />
+        </div>
+      )}
+
+      {(!expanded || expanded === 'recommended') && (
+        <div style={{ marginBottom: 36 }}>
+          <DiscoverSectionHeader icon="✨" iconBg={C.accent} title="Recommended" count={recVisible.length}
+            onTitleClick={() => setExpanded(expanded === 'recommended' ? null : 'recommended')}
+            filterOpen={showRecFilter} onFilterToggle={() => setShowRecFilter(o => !o)}
+            tooltip="Recommended by friends, or books they've read and rated 5 stars" />
+          {showRecFilter && (
+            <DiscoverFilterPanel primaryLabel="Source" primaryOptions={RECOMMENDED_FILTERS}
+              primaryValue={recFilter} onPrimaryChange={setRecFilter}
+              genreOptions={recGenres} genreValue={recGenre} onGenreChange={setRecGenre} />
+          )}
+          <DiscoverSectionBody expanded={expanded === 'recommended'} loading={loading}
+            items={recVisible} emptyMsg="Recommendations will show up here as you use the app"
+            renderItem={book => (
+              <RecoCard key={book.id} book={book} userId={userId} myBookIds={myBookIds}
+                onAdded={id => { markAdded(id); loadDiscoverData() }}
+                onDismiss={id => setDismissedRecs(prev => new Set([...prev, id]))}
+                onOpenModal={() => setModal({ book })} caption={book.reason} />
+            )} />
+        </div>
+      )}
+
+      {(!expanded || expanded === 'trending') && (
+        <div style={{ marginBottom: 36 }}>
+          <DiscoverSectionHeader icon="🔥" iconBg={C.danger} title="Trending" count={trendVisible.length}
+            onTitleClick={() => setExpanded(expanded === 'trending' ? null : 'trending')}
+            filterOpen={showTrendFilter} onFilterToggle={() => setShowTrendFilter(o => !o)}
+            tooltip="Books being added by the most BookList readers recently" />
+          {showTrendFilter && (
+            <DiscoverFilterPanel genreOptions={trendGenres} genreValue={trendGenre} onGenreChange={setTrendGenre} />
+          )}
+          <DiscoverSectionBody expanded={expanded === 'trending'} loading={loading}
+            items={trendVisible} emptyMsg="Nothing trending right now."
+            renderItem={book => (
+              <RecoCard key={book.id} book={book} userId={userId} myBookIds={myBookIds}
+                onAdded={id => { markAdded(id); loadDiscoverData() }}
+                onDismiss={id => setDismissedRecs(prev => new Set([...prev, id]))}
+                onOpenModal={() => setModal({ book })}
+                caption={book.adds ? `${book.adds} readers added this` : book.reason} />
+            )} />
+        </div>
+      )}
+
+      {(!expanded || expanded === 'picks') && (
+        <div style={{ marginBottom: 36 }}>
+          <DiscoverSectionHeader icon="⭐" iconBg={C.accent} title="Picks" count={picksVisible.length}
+            onTitleClick={() => setExpanded(expanded === 'picks' ? null : 'picks')}
+            filterOpen={showPicksFilter} onFilterToggle={() => setShowPicksFilter(o => !o)}
+            tooltip="Curated reading lists — best of the year, summer reads, award winners, and staff picks" />
+          {showPicksFilter && (
+            <DiscoverFilterPanel primaryLabel="List" primaryOptions={PICKS_FILTERS}
+              primaryValue={picksFilter} onPrimaryChange={setPicksFilter}
+              genreOptions={picksGenres} genreValue={picksGenre} onGenreChange={setPicksGenre} />
+          )}
+          <DiscoverSectionBody expanded={expanded === 'picks'} loading={loading}
+            items={picksVisible} emptyMsg="Loading picks…"
+            renderItem={book => (
+              <RecoCard key={book.id} book={book} userId={userId} myBookIds={myBookIds}
+                onAdded={id => { markAdded(id); loadDiscoverData() }}
+                onDismiss={id => setDismissedRecs(prev => new Set([...prev, id]))}
+                onOpenModal={() => setModal({ book })} caption={book.reason} />
+            )} />
+        </div>
+      )}
+
+      {modal && (
+        <BookDetailModal
+          item={modal.book}
+          userId={userId}
+          onClose={() => setModal(null)}
+          onUpdate={() => loadDiscoverData()}
         />
       )}
     </div>
@@ -1512,14 +2701,16 @@ function HomePage({ userId, setView }) {
 // ================================================================
 // My List page – poster grid with filter pills
 // ================================================================
-function MyListPage({ userId }) {
-  const [filter,    setFilter]    = useState('all')
-  const [searchQ,   setSearchQ]   = useState('')
+function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack }) {
+  const [filter,    setFilter]    = useState(initialFilter)
   const [userBooks, setUserBooks] = useState([])
   const [loading,   setLoading]   = useState(true)
   const [modal,     setModal]     = useState(null)
   const [dragIdx,   setDragIdx]   = useState(null)
   const [overIdx,   setOverIdx]   = useState(null)
+  const [showFilter, setShowFilter] = useState(false)
+  const [readSort,  setReadSort]  = useState('default')
+  const [readGenre, setReadGenre] = useState('all')
 
   const fetchBooks = useCallback(async () => {
     setLoading(true)
@@ -1560,20 +2751,29 @@ function MyListPage({ userId }) {
   }
 
   const baseFiltered = filter === 'all' ? userBooks : userBooks.filter(u => u.status === filter)
-  const q = searchQ.toLowerCase().trim()
-  const matched = q
-    ? baseFiltered.filter(u => {
-        const title   = (u.books?.title || '').toLowerCase()
-        const authors = (u.books?.authors || []).join(' ').toLowerCase()
-        return title.includes(q) || authors.includes(q)
-      })
-    : baseFiltered
-  const isQueue = filter === 'want_to_read' && !q
+  const matched = baseFiltered
+  const isQueue = filter === 'want_to_read'
+  const readGenres = useMemo(() => {
+    if (filter !== 'read') return []
+    return topCategories(matched.map(u => u.books || {}))
+  }, [matched, filter])
+  const genreFiltered = (filter === 'read' && readGenre !== 'all')
+    ? matched.filter(u => bookGenres(u.books).includes(readGenre))
+    : matched
+  function sortDefault(list) {
+    return [...list].sort((a, b) => {
+      if (!!b.top_10 !== !!a.top_10) return b.top_10 ? 1 : -1
+      return (b.rating || 0) - (a.rating || 0)
+    })
+  }
   // Sort: Top 10 first, then by rating desc — except in drag-reorder queue mode
-  const visible = isQueue ? matched : [...matched].sort((a, b) => {
-    if (!!b.top_10 !== !!a.top_10) return b.top_10 ? 1 : -1
-    return (b.rating || 0) - (a.rating || 0)
-  })
+  const visible = isQueue
+    ? genreFiltered
+    : filter === 'read' && readSort === 'recent'
+    ? genreFiltered
+    : filter === 'read' && readSort === 'top_rated'
+    ? [...genreFiltered].sort((a, b) => (b.rating || 0) - (a.rating || 0))
+    : sortDefault(genreFiltered)
 
   // Drag for want_to_read queue
   function onDragStart(e, idx) { setDragIdx(idx); e.dataTransfer.effectAllowed = 'move' }
@@ -1590,45 +2790,80 @@ function MyListPage({ userId }) {
 
   return (
     <div>
-      {/* Search bar */}
-      <div style={{ position: 'relative', marginBottom: 16 }}>
-        <input
-          value={searchQ}
-          onChange={e => setSearchQ(e.target.value)}
-          placeholder="🔍  Search your library…"
-          style={{
-            ...inputStyle, fontSize: 14, padding: '10px 40px 10px 14px',
-            borderRadius: 8, border: `1px solid ${searchQ ? C.primary : C.border}`,
-          }}
-        />
-        {searchQ && (
-          <button onClick={() => setSearchQ('')}
-            style={{
-              position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
-              background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 18,
-            }}>×</button>
-        )}
-      </div>
-
-      {/* Filter pills */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 24, flexWrap: 'wrap' }}>
-        {[
-          ['all', 'All', counts.all],
-          ['reading', '📖 Reading', counts.reading],
-          ['read', '✅ Read', counts.read],
-          ['want_to_read', '🔖 Want to Read', counts.want_to_read],
-        ].map(([key, lbl, count]) => (
-          <button key={key} onClick={() => setFilter(key)} style={pill(filter === key)}>
-            {lbl}
-            <span style={{
-              marginLeft: 6, fontSize: 11, fontFamily: f.sans, fontWeight: 700,
-              padding: '1px 6px', borderRadius: 10,
-              background: filter === key ? 'rgba(255,255,255,0.2)' : C.border,
-              color: filter === key ? C.white : C.muted,
-            }}>{count}</span>
+      {onBack && (
+        <button onClick={onBack} style={{
+          background: C.surface2, border: `1px solid ${C.border}`, color: C.muted,
+          borderRadius: 8, padding: '7px 14px', cursor: 'pointer',
+          fontFamily: f.sans, fontSize: 13, fontWeight: 600, marginBottom: 16,
+        }}>← Back to Home</button>
+      )}
+      {(!lockedFilter || lockedFilter === 'read') && (
+        <div style={{ marginBottom: 16 }}>
+          <button onClick={() => setShowFilter(o => !o)} style={{ ...pill(showFilter), fontSize: 12 }}>
+            Filter ▾
           </button>
-        ))}
-      </div>
+          {showFilter && (
+            <div style={{
+              background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10,
+              padding: 14, marginTop: 10,
+            }}>
+              {!lockedFilter && (
+                <>
+                  <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+                    textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Status</p>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: filter === 'read' ? 14 : 0 }}>
+                    {[
+                      ['all', 'All', counts.all],
+                      ['reading', '▶ Reading', counts.reading],
+                      ['read', '✅ Read', counts.read],
+                      ['want_to_read', '👀 Want to Read', counts.want_to_read],
+                    ].map(([key, lbl, count]) => (
+                      <button key={key} onClick={() => setFilter(key)} style={pill(filter === key)}>
+                        {lbl}
+                        <span style={{
+                          marginLeft: 6, fontSize: 11, fontFamily: f.sans, fontWeight: 700,
+                          padding: '1px 6px', borderRadius: 10,
+                          background: filter === key ? 'rgba(255,255,255,0.2)' : C.border,
+                          color: filter === key ? C.white : C.muted,
+                        }}>{count}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+              {filter === 'read' && (
+                <>
+                  <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+                    textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Sort</p>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: readGenres.length > 0 ? 14 : 0 }}>
+                    {READ_SORTS.map(([key, lbl]) => (
+                      <button key={key} onClick={() => setReadSort(key)} style={pill(readSort === key)}>
+                        {lbl}
+                      </button>
+                    ))}
+                  </div>
+                  {readGenres.length > 0 && (
+                    <>
+                      <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+                        textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Genre</p>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button onClick={() => setReadGenre('all')} style={{ ...pill(readGenre === 'all'), fontSize: 12 }}>
+                          All
+                        </button>
+                        {readGenres.map(g => (
+                          <button key={g} onClick={() => setReadGenre(g)} style={{ ...pill(readGenre === g), fontSize: 12 }}>
+                            {g}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {isQueue && visible.length > 1 && (
         <p style={{ margin: '0 0 16px', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
@@ -1653,25 +2888,14 @@ function MyListPage({ userId }) {
                 onDragEnd={() => { setDragIdx(null); setOverIdx(null) }}
                 style={{
                   opacity: isQueue && dragIdx === idx ? 0.4 : 1,
-                  outline: isQueue && overIdx === idx && dragIdx !== idx
-                    ? `2px solid ${C.primary}`
-                    : ub.top_10
-                      ? `3px solid ${C.accent}`
-                      : '2px solid transparent',
+                  outline: isQueue && overIdx === idx && dragIdx !== idx ? `2px solid ${C.primary}` : 'none',
                   borderRadius: 10, transition: 'opacity 0.15s',
-                  boxShadow: ub.top_10 ? `0 0 12px rgba(240,180,41,0.35)` : 'none',
                 }}
               >
                 <PosterCard
                   userBook={ub}
                   onClick={() => setModal(ub)}
                 />
-                {ub.top_10 && (
-                  <div style={{
-                    textAlign: 'center', fontSize: 10, fontFamily: f.sans, fontWeight: 700,
-                    color: C.accent, marginTop: 3,
-                  }}>⭐ Top 10</div>
-                )}
               </div>
             ))}
           </div>
@@ -1683,7 +2907,7 @@ function MyListPage({ userId }) {
           item={modal}
           userId={userId}
           onClose={() => setModal(null)}
-          onUpdate={() => { setModal(null); fetchBooks() }}
+          onUpdate={() => fetchBooks()}
         />
       )}
     </div>
@@ -1697,11 +2921,12 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
   const friendId = friendProfile.id
   const [books,       setBooks]       = useState([])
   const [loading,     setLoading]     = useState(true)
-  const [filter,      setFilter]      = useState('all')
-  const [searchQ,     setSearchQ]     = useState('')
   const [addingBook,  setAddingBook]  = useState(null)
   const [modal,       setModal]       = useState(null)
   const [hoveredId,   setHoveredId]   = useState(null)
+  const [showReadFilter, setShowReadFilter] = useState(false)
+  const [readSort,     setReadSort]     = useState('default')
+  const [readGenre,    setReadGenre]    = useState('all')
 
   useEffect(() => {
     supabase.from('user_books').select('*, books(*)')
@@ -1718,22 +2943,87 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
     setAddingBook(null)
   }
 
-  const counts = {
-    all:          books.length,
-    reading:      books.filter(u => u.status === 'reading').length,
-    read:         books.filter(u => u.status === 'read').length,
-    want_to_read: books.filter(u => u.status === 'want_to_read').length,
+  const reading    = books.filter(u => u.status === 'reading')
+  const wantToRead = books.filter(u => u.status === 'want_to_read')
+  const readAll    = books.filter(u => u.status === 'read')
+  const readGenres = useMemo(() => topCategories(readAll.map(u => u.books || {})), [books])
+  const read = (() => {
+    const list = readGenre === 'all' ? readAll : readAll.filter(u => bookGenres(u.books).includes(readGenre))
+    if (readSort === 'recent') return list
+    if (readSort === 'top_rated') return [...list].sort((a, b) => (b.rating || 0) - (a.rating || 0))
+    return [...list].sort((a, b) => {
+      if (!!b.top_10 !== !!a.top_10) return b.top_10 ? 1 : -1
+      return (b.rating || 0) - (a.rating || 0)
+    })
+  })()
+
+  function renderTile(ub) {
+    const book      = ub.books || {}
+    const inLibrary = myBookIds.has(ub.book_id)
+    const isHovered = hoveredId === ub.id
+    return (
+      <div key={ub.id}
+        onMouseEnter={() => setHoveredId(ub.id)}
+        onMouseLeave={() => setHoveredId(null)}
+        style={{ position: 'relative' }}
+      >
+        {/* Top 10 gold border if friend has it */}
+        <div style={{
+          borderRadius: 10,
+          outline: ub.top_10 ? `3px solid ${C.accent}` : 'none',
+        }}>
+          <PosterCard userBook={ub} onClick={() => setModal(book)} />
+        </div>
+
+        {/* Hover overlay with quick-add buttons */}
+        {isHovered && !inLibrary && (
+          <div style={{
+            position: 'absolute', inset: 0, borderRadius: 8,
+            background: 'rgba(10,8,24,0.82)',
+            display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center', gap: 8,
+            padding: 10,
+          }}>
+            <p style={{ margin: 0, fontSize: 10, color: C.muted, fontFamily: f.sans, textAlign: 'center' }}>
+              Add to your library:
+            </p>
+            {[
+              ['want_to_read', '👀', 'Want'],
+              ['reading',      '▶', 'Reading'],
+              ['read',         '✅', 'Read'],
+            ].map(([st, icon, lbl]) => (
+              <button key={st} onClick={() => quickAdd(book, st)}
+                disabled={!!addingBook}
+                style={{
+                  width: '100%', padding: '6px 4px', borderRadius: 6,
+                  border: 'none', cursor: addingBook ? 'not-allowed' : 'pointer',
+                  fontFamily: f.sans, fontSize: 11, fontWeight: 700,
+                  background: st === 'want_to_read' ? C.accent
+                    : st === 'reading' ? C.primary : C.success,
+                  color: st === 'want_to_read' ? '#0f1117' : C.white,
+                  opacity: addingBook && addingBook !== book.id + st ? 0.6 : 1,
+                }}>
+                {addingBook === book.id + st ? '…' : `${icon} ${lbl}`}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Already in library badge on hover */}
+        {isHovered && inLibrary && (
+          <div style={{
+            position: 'absolute', inset: 0, borderRadius: 8,
+            background: 'rgba(10,8,24,0.7)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <span style={{ fontSize: 12, color: C.success, fontFamily: f.sans, fontWeight: 700 }}>
+              ✓ In library
+            </span>
+          </div>
+        )}
+      </div>
+    )
   }
-  const q = searchQ.toLowerCase()
-  const baseFiltered = filter === 'all' ? books : books.filter(u => u.status === filter)
-  const matched = q
-    ? baseFiltered.filter(u => (u.books?.title||'').toLowerCase().includes(q) || (u.books?.authors||[]).join(' ').toLowerCase().includes(q))
-    : baseFiltered
-  // Sort: Top 10 first, then by rating desc
-  const visible = [...matched].sort((a, b) => {
-    if (!!b.top_10 !== !!a.top_10) return b.top_10 ? 1 : -1
-    return (b.rating || 0) - (a.rating || 0)
-  })
 
   return (
     <div>
@@ -1755,132 +3045,185 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
           </div>
           <div>
             <p style={{ margin: 0, fontWeight: 700, fontSize: 17, color: C.text, fontFamily: f.sans }}>
-              {friendProfile.display_name || friendProfile.username}
+              {friendProfile.display_name || friendProfile.username}'s List
             </p>
             <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans }}>
-              @{friendProfile.username} · {counts.all} books
+              {books.length} titles total
             </p>
           </div>
         </div>
       </div>
 
-      {/* Search their list */}
-      <div style={{ position: 'relative', marginBottom: 14 }}>
-        <input value={searchQ} onChange={e => setSearchQ(e.target.value)}
-          placeholder="🔍  Search their list…"
-          style={{ ...inputStyle, padding: '10px 38px 10px 14px', borderRadius: 8,
-            border: `1px solid ${searchQ ? C.primary : C.border}` }} />
-        {searchQ && (
-          <button onClick={() => setSearchQ('')} style={{
-            position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
-            background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 18,
-          }}>×</button>
-        )}
-      </div>
+      <HorizontalRow
+        title="Reading"
+        icon="▶"
+        iconBg={STATUS_COLORS.reading.color}
+        items={reading}
+        renderItem={renderTile}
+        loading={loading}
+        emptyMsg="Not reading anything right now"
+      />
 
-      {/* Filter pills */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 22, flexWrap: 'wrap' }}>
-        {[
-          ['all',          'All',              counts.all],
-          ['reading',      '📖 Reading',       counts.reading],
-          ['read',         '✅ Read',          counts.read],
-          ['want_to_read', '🔖 Want to Read',  counts.want_to_read],
-        ].map(([key, lbl, count]) => (
-          <button key={key} onClick={() => setFilter(key)} style={pill(filter === key)}>
-            {lbl}
-            <span style={{
-              marginLeft: 6, fontSize: 11, fontWeight: 700, padding: '1px 6px', borderRadius: 10,
-              background: filter === key ? 'rgba(255,255,255,0.2)' : C.border,
-              color: filter === key ? C.white : C.muted,
-            }}>{count}</span>
-          </button>
-        ))}
-      </div>
+      <HorizontalRow
+        title="Want to Read"
+        icon="👀"
+        iconBg={C.accent}
+        items={wantToRead}
+        renderItem={renderTile}
+        loading={loading}
+        emptyMsg="Nothing on the want-to-read list"
+      />
 
-      {loading ? <Spinner /> : visible.length === 0
-        ? <EmptyState message="Nothing here" sub="No books match this filter" />
-        : (
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
-            gap: 16,
-          }}>
-            {visible.map(ub => {
-              const book      = ub.books || {}
-              const inLibrary = myBookIds.has(ub.book_id)
-              const isHovered = hoveredId === ub.id
-              return (
-                <div key={ub.id}
-                  onMouseEnter={() => setHoveredId(ub.id)}
-                  onMouseLeave={() => setHoveredId(null)}
-                  style={{ position: 'relative' }}
-                >
-                  {/* Top 10 gold border if friend has it */}
-                  <div style={{
-                    borderRadius: 10,
-                    outline: ub.top_10 ? `3px solid ${C.accent}` : 'none',
-                  }}>
-                    <PosterCard userBook={ub} onClick={() => setModal(book)} />
-                  </div>
-
-                  {/* Hover overlay with quick-add buttons */}
-                  {isHovered && !inLibrary && (
-                    <div style={{
-                      position: 'absolute', inset: 0, borderRadius: 8,
-                      background: 'rgba(10,8,24,0.82)',
-                      display: 'flex', flexDirection: 'column',
-                      alignItems: 'center', justifyContent: 'center', gap: 8,
-                      padding: 10,
-                    }}>
-                      <p style={{ margin: 0, fontSize: 10, color: C.muted, fontFamily: f.sans, textAlign: 'center' }}>
-                        Add to your library:
-                      </p>
-                      {[
-                        ['want_to_read', '🔖', 'Want'],
-                        ['reading',      '📖', 'Reading'],
-                        ['read',         '✅', 'Read'],
-                      ].map(([st, icon, lbl]) => (
-                        <button key={st} onClick={() => quickAdd(book, st)}
-                          disabled={!!addingBook}
-                          style={{
-                            width: '100%', padding: '6px 4px', borderRadius: 6,
-                            border: 'none', cursor: addingBook ? 'not-allowed' : 'pointer',
-                            fontFamily: f.sans, fontSize: 11, fontWeight: 700,
-                            background: st === 'want_to_read' ? C.accent
-                              : st === 'reading' ? C.primary : C.success,
-                            color: st === 'want_to_read' ? '#0f1117' : C.white,
-                            opacity: addingBook && addingBook !== book.id + st ? 0.6 : 1,
-                          }}>
-                          {addingBook === book.id + st ? '…' : `${icon} ${lbl}`}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Already in library badge on hover */}
-                  {isHovered && inLibrary && (
-                    <div style={{
-                      position: 'absolute', inset: 0, borderRadius: 8,
-                      background: 'rgba(10,8,24,0.7)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    }}>
-                      <span style={{ fontSize: 12, color: C.success, fontFamily: f.sans, fontWeight: 700 }}>
-                        ✓ In library
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
+      {/* Read — expands as a full grid, with sort/genre filter — mirrors Home */}
+      <div style={{ marginBottom: 36 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <SectionBadge icon="✅" bg={C.success} />
+            <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontWeight: 700, fontFamily: f.sans }}>Read</h2>
+            <CountPill n={read.length} />
           </div>
-        )
-      }
+          <button onClick={() => setShowReadFilter(o => !o)} style={{ ...pill(showReadFilter), fontSize: 12 }}>
+            Filter ▾
+          </button>
+        </div>
+
+        {showReadFilter && (
+          <div style={{
+            background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10,
+            padding: 14, marginBottom: 16,
+          }}>
+            <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+              textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Sort</p>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: readGenres.length > 0 ? 14 : 0 }}>
+              {READ_SORTS.map(([key, lbl]) => (
+                <button key={key} onClick={() => setReadSort(key)} style={pill(readSort === key)}>
+                  {lbl}
+                </button>
+              ))}
+            </div>
+            {readGenres.length > 0 && (
+              <>
+                <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+                  textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Genre</p>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button onClick={() => setReadGenre('all')} style={{ ...pill(readGenre === 'all'), fontSize: 12 }}>
+                    All
+                  </button>
+                  {readGenres.map(g => (
+                    <button key={g} onClick={() => setReadGenre(g)} style={{ ...pill(readGenre === g), fontSize: 12 }}>
+                      {g}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {loading ? <Spinner /> : read.length === 0
+          ? <p style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, fontStyle: 'italic', margin: 0 }}>
+              Nothing marked as read yet
+            </p>
+          : (
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
+              gap: 16,
+            }}>
+              {read.map(renderTile)}
+            </div>
+          )
+        }
+      </div>
 
       {modal && (
         <BookDetailModal item={modal} userId={userId}
           onClose={() => setModal(null)}
-          onUpdate={() => setModal(null)} />
+          onUpdate={() => {}} />
       )}
+    </div>
+  )
+}
+
+// ================================================================
+// RecommendPopover – send a book from your library to a friend
+// ================================================================
+function RecommendPopover({ userId, friend, onClose }) {
+  const [books,  setBooks]  = useState(null)
+  const [q,      setQ]      = useState('')
+  const [sentId, setSentId] = useState(null)
+
+  useEffect(() => {
+    supabase.from('user_books').select('*, books(*)').eq('user_id', userId)
+      .order('rating', { ascending: false })
+      .then(({ data }) => setBooks(data || []))
+  }, [userId])
+
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  async function send(book) {
+    setSentId(book.id)
+    await supabase.from('book_recommendations').insert({
+      from_user_id: userId, to_user_id: friend.id, book_id: book.id,
+    })
+    setTimeout(onClose, 900)
+  }
+
+  const ql = q.toLowerCase()
+  const visible = (books || []).filter(ub =>
+    !ql || (ub.books?.title || '').toLowerCase().includes(ql)
+        || (ub.books?.authors || []).join(' ').toLowerCase().includes(ql))
+
+  return (
+    <div onClick={(e) => e.target === e.currentTarget && onClose()} style={{
+      position: 'fixed', inset: 0, zIndex: 1100,
+      background: 'rgba(5,4,15,0.88)', backdropFilter: 'blur(6px)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+    }}>
+      <div style={{
+        background: C.surface, borderRadius: 14, padding: 24, maxWidth: 400, width: '100%',
+        maxHeight: '78vh', display: 'flex', flexDirection: 'column',
+        border: `1px solid ${C.border}`, boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <h3 style={{ margin: 0, color: C.text, fontFamily: f.serif, fontSize: 18 }}>
+            Send a book to {friend?.display_name || friend?.username}
+          </h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 20, cursor: 'pointer' }}>×</button>
+        </div>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search your library…"
+          style={{ ...inputStyle, marginBottom: 12 }} />
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+          {books === null ? <Spinner /> : visible.length === 0
+            ? <p style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, fontStyle: 'italic', margin: 0 }}>
+                No books match.
+              </p>
+            : visible.map(ub => (
+              <div key={ub.id} style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+                padding: '8px 0', borderBottom: `1px solid ${C.border}`,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <span style={{
+                    fontSize: 13, color: C.text, fontFamily: f.sans, fontWeight: 600,
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}>{ub.books?.title}</span>
+                  {ub.rating > 0 && (
+                    <span style={{ fontSize: 11, color: C.star, flexShrink: 0 }}>{'★'.repeat(ub.rating)}</span>
+                  )}
+                </div>
+                {sentId === ub.books?.id
+                  ? <span style={{ fontSize: 12, color: C.success, fontWeight: 700, fontFamily: f.sans, flexShrink: 0 }}>✓ Sent</span>
+                  : <button onClick={() => send(ub.books)} style={{ ...btn('ghost', 'sm'), flexShrink: 0 }}>Send</button>}
+              </div>
+            ))
+          }
+        </div>
+      </div>
     </div>
   )
 }
@@ -1888,6 +3231,14 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
 // ================================================================
 // Friends page
 // ================================================================
+const FRIEND_STATUS_FILTERS = [
+  ['all',          'All'],
+  ['reading',      '▶ Reading'],
+  ['want_to_read', '👀 Want to Read'],
+  ['highly_rated', '⭐ Highly Rated'],
+  ['recent',       '🕐 Recent'],
+]
+
 function FriendsPage({ userId }) {
   const [searchQ,      setSearchQ]      = useState('')
   const [searchRes,    setSearchRes]    = useState([])
@@ -1901,6 +3252,12 @@ function FriendsPage({ userId }) {
   const [friendView,   setFriendView]   = useState(null) // friendProfile being viewed
   const [myBookIds,    setMyBookIds]    = useState(new Set())
   const [modal,        setModal]        = useState(null)
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [showShelfFilter, setShowShelfFilter] = useState(false)
+  const [friendBooks,  setFriendBooks]  = useState([])
+  const [shelfLoading, setShelfLoading] = useState(true)
+  const [tasteMap,     setTasteMap]     = useState({}) // friendId -> match %
+  const [recommendTo,  setRecommendTo]  = useState(null) // friendProfile being sent a book
 
   function copyInviteLink() {
     const link = `${window.location.origin}${window.location.pathname}?invite=${userId}`
@@ -1912,13 +3269,13 @@ function FriendsPage({ userId }) {
 
   const loadFriendships = useCallback(async () => {
     setLoading(true)
-    // Load my library IDs for quick-add comparison
-    const { data: myLib } = await supabase.from('user_books').select('book_id').eq('user_id', userId)
-    setMyBookIds(new Set((myLib || []).map(r => r.book_id)))
+    // Load my full library (with genres) for quick-add comparison + taste-match calc
+    const { data: myLibFull } = await supabase.from('user_books').select('*, books(*)').eq('user_id', userId)
+    setMyBookIds(new Set((myLibFull || []).map(r => r.book_id)))
 
     const { data: fships } = await supabase.from('friendships').select('*')
       .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`)
-    if (!fships) { setLoading(false); return }
+    if (!fships) { setLoading(false); setShelfLoading(false); return }
 
     const allIds = [...new Set(fships.flatMap(f => [f.requester_id, f.addressee_id]))]
     const { data: profiles } = await supabase.from('profiles').select('*').in('id', allIds)
@@ -1935,6 +3292,29 @@ function FriendsPage({ userId }) {
     setIncoming(pend.filter(f => f.addressee_id === userId).map(f => ({ ...f, requesterProfile: pm[f.requester_id] })))
     setOutgoing(pend.filter(f => f.requester_id === userId).map(f => ({ ...f, addresseeProfile: pm[f.addressee_id] })))
     setLoading(false)
+
+    // Friends' shelf — aggregated books across all accepted friends
+    if (accepted.length > 0) {
+      const friendIds = accepted.map(f => f.requester_id === userId ? f.addressee_id : f.requester_id)
+      const { data: fBooks } = await supabase.from('user_books').select('*, books(*)')
+        .in('user_id', friendIds).order('updated_at', { ascending: false }).limit(100)
+      setFriendBooks(fBooks || [])
+
+      // Taste-match % — pull each friend's full shelf (lightweight, genres only) and
+      // compare against mine via genre-overlap + shared-books.
+      const { data: fGenreRows } = await supabase.from('user_books')
+        .select('user_id, book_id, books(categories)').in('user_id', friendIds)
+      const tm = {}
+      friendIds.forEach(fid => {
+        const theirs = (fGenreRows || []).filter(u => u.user_id === fid)
+        tm[fid] = computeTasteMatch(myLibFull || [], theirs)
+      })
+      setTasteMap(tm)
+    } else {
+      setFriendBooks([])
+      setTasteMap({})
+    }
+    setShelfLoading(false)
   }, [userId])
 
   useEffect(() => { loadFriendships() }, [loadFriendships])
@@ -1972,11 +3352,12 @@ function FriendsPage({ userId }) {
     ...outgoing.map(f => f.addressee_id),
   ])
 
-  const sectionHdr = (text) => (
-    <h3 style={{ margin: '0 0 14px', color: C.text, fontSize: 15, fontFamily: f.sans, fontWeight: 700 }}>{text}</h3>
-  )
-
-  const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 18, marginBottom: 16 }
+  const shelfVisible = friendBooks.filter(ub => {
+    if (statusFilter === 'all') return true
+    if (statusFilter === 'highly_rated') return (ub.rating || 0) >= 4
+    if (statusFilter === 'recent') return true // already sorted by updated_at desc
+    return ub.status === statusFilter
+  })
 
   // If viewing a friend's full list, render that component
   if (friendView) {
@@ -1992,30 +3373,21 @@ function FriendsPage({ userId }) {
   }
 
   return (
-    <div style={{ maxWidth: 560 }}>
-      {/* Invite link */}
-      <div style={{
-        ...card,
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-      }}>
-        <div>
-          <p style={{ margin: '0 0 3px', fontWeight: 700, color: C.text, fontFamily: f.sans, fontSize: 14 }}>
-            📨 Invite a Friend
-          </p>
-          <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans }}>
+    <div>
+      <Accordion icon="✉️" title="Invite a Friend">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans, flex: 1, minWidth: 180 }}>
             Share your personal invite link — they'll be auto-connected when they sign up.
           </p>
+          <button onClick={copyInviteLink}
+            style={{ ...btn(inviteCopied ? 'subtle' : 'accent', 'sm'), flexShrink: 0 }}>
+            {inviteCopied ? '✓ Copied!' : '🔗 Copy Link'}
+          </button>
         </div>
-        <button onClick={copyInviteLink}
-          style={{ ...btn(inviteCopied ? 'subtle' : 'accent', 'sm'), flexShrink: 0 }}>
-          {inviteCopied ? '✓ Copied!' : '🔗 Copy Link'}
-        </button>
-      </div>
+      </Accordion>
 
-      {/* Find readers */}
-      <div style={{ ...card }}>
-        {sectionHdr('🔍 Find Readers')}
-        <form onSubmit={searchUsers} style={{ display: 'flex', gap: 8 }}>
+      <Accordion icon="🔭" title="Find a Friend">
+        <form onSubmit={searchUsers} style={{ display: 'flex', gap: 8, marginBottom: searchRes.length ? 10 : 0 }}>
           <input style={{ ...inputStyle, flex: 1 }} value={searchQ}
             onChange={e => setSearchQ(e.target.value)}
             placeholder="Search by username or name…" />
@@ -2040,258 +3412,163 @@ function FriendsPage({ userId }) {
             }
           </div>
         ))}
-      </div>
 
-      {/* Incoming requests */}
-      {incoming.length > 0 && (
-        <div style={card}>
-          {sectionHdr(`📬 Friend Requests (${incoming.length})`)}
-          {incoming.map(f => (
-            <div key={f.id} style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '10px 0', borderBottom: `1px solid ${C.border}`,
-            }}>
-              <div>
-                <p style={{ margin: 0, fontWeight: 700, color: C.text, fontFamily: f.sans }}>
-                  {f.requesterProfile?.display_name || f.requesterProfile?.username || 'Unknown'}
-                </p>
-                <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans }}>
-                  @{f.requesterProfile?.username}
-                </p>
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button onClick={() => respond(f.id, 'accepted')} style={btn('primary', 'sm')}>Accept</button>
-                <button onClick={() => respond(f.id, 'declined')} style={btn('danger', 'sm')}>Decline</button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Outgoing */}
-      {outgoing.length > 0 && (
-        <div style={card}>
-          {sectionHdr('Sent Requests')}
-          {outgoing.map(f => (
-            <div key={f.id} style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '10px 0', borderBottom: `1px solid ${C.border}`,
-            }}>
-              <div>
-                <p style={{ margin: 0, color: C.text, fontFamily: f.sans }}>
-                  {f.addresseeProfile?.display_name || f.addresseeProfile?.username || 'Unknown'}
-                </p>
-                <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans }}>Pending…</p>
-              </div>
-              <button onClick={() => remove(f.id)} style={btn('subtle', 'sm')}>Cancel</button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Friends list — WatchList style */}
-      {sectionHdr(`Your Friends (${friends.length})`)}
-      {loading ? <Spinner /> : friends.length === 0
-        ? <EmptyState icon="👥" message="No friends yet" sub="Search above to find other readers" />
-        : friends.map(f => (
-            <div key={f.id} style={{
-              ...card,
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '14px 18px', cursor: 'default',
-            }}>
-              {/* Avatar + name */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{
-                  width: 40, height: 40, borderRadius: '50%',
-                  background: `linear-gradient(135deg, ${C.primaryDim}, ${C.surface2})`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 20, border: `2px solid ${C.border}`, flexShrink: 0,
-                }}>
-                  {f.friendProfile?.avatar_url || '👤'}
-                </div>
+        {incoming.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <p style={{ margin: '0 0 8px', fontSize: 12, fontWeight: 700, color: C.muted, fontFamily: f.sans,
+              textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              📬 Requests ({incoming.length})
+            </p>
+            {incoming.map(f => (
+              <div key={f.id} style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '10px 0', borderBottom: `1px solid ${C.border}`,
+              }}>
                 <div>
-                  <p style={{ margin: 0, fontWeight: 700, fontSize: 15, color: C.text, fontFamily: f.sans }}>
-                    {f.friendProfile?.display_name || f.friendProfile?.username || 'Unknown'}
+                  <p style={{ margin: 0, fontWeight: 700, color: C.text, fontFamily: f.sans }}>
+                    {f.requesterProfile?.display_name || f.requesterProfile?.username || 'Unknown'}
                   </p>
                   <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans }}>
-                    @{f.friendProfile?.username}
+                    @{f.requesterProfile?.username}
                   </p>
                 </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={() => respond(f.id, 'accepted')} style={btn('primary', 'sm')}>Accept</button>
+                  <button onClick={() => respond(f.id, 'declined')} style={btn('danger', 'sm')}>Decline</button>
+                </div>
               </div>
+            ))}
+          </div>
+        )}
 
-              {/* Actions */}
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <button onClick={() => setFriendView(f.friendProfile)}
-                  style={{ ...btn('ghost', 'sm'), fontSize: 13 }}>
-                  View List →
-                </button>
-                <button onClick={() => remove(f.id)} style={btn('subtle', 'sm')}>Unfriend</button>
-              </div>
-            </div>
-          ))
-      }
-    </div>
-  )
-}
-
-// ================================================================
-// Activity page – timeline feed
-// ================================================================
-function ActivityPage({ userId }) {
-  const [feed,       setFeed]       = useState([])
-  const [profileMap, setProfileMap] = useState({})
-  const [received,   setReceived]   = useState([])
-  const [loading,    setLoading]    = useState(true)
-  const [modal,      setModal]      = useState(null)
-  const [myBookIds,  setMyBookIds]  = useState(new Set())
-
-  useEffect(() => { loadActivity() }, [userId])
-
-  async function loadActivity() {
-    setLoading(true)
-
-    // My book IDs
-    const { data: myLib } = await supabase.from('user_books').select('book_id').eq('user_id', userId)
-    setMyBookIds(new Set((myLib || []).map(r => r.book_id)))
-
-    // Friends
-    const { data: fships } = await supabase.from('friendships')
-      .select('requester_id, addressee_id')
-      .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`)
-      .eq('status', 'accepted')
-
-    if (!fships?.length) { setLoading(false); return }
-
-    const friendIds = fships.map(f => f.requester_id === userId ? f.addressee_id : f.requester_id)
-    const [{ data: acts }, { data: profs }, { data: recs }] = await Promise.all([
-      supabase.from('user_books').select('*, books(*)').in('user_id', friendIds)
-        .order('updated_at', { ascending: false }).limit(60),
-      supabase.from('profiles').select('id, display_name, username').in('id', friendIds),
-      supabase.from('book_recommendations').select('*, books(*)')
-        .eq('to_user_id', userId).order('created_at', { ascending: false }).limit(10),
-    ])
-
-    setFeed(acts || [])
-    setProfileMap(Object.fromEntries((profs || []).map(p => [p.id, p])))
-
-    // Enrich received recs with sender profiles
-    if (recs?.length) {
-      const fromIds = [...new Set(recs.map(r => r.from_user_id))]
-      const { data: fromProfs } = await supabase.from('profiles').select('id, display_name, username').in('id', fromIds)
-      const pm2 = Object.fromEntries((fromProfs || []).map(p => [p.id, p]))
-      setReceived(recs.map(r => ({ ...r, fromProfile: pm2[r.from_user_id] })))
-    }
-
-    setLoading(false)
-  }
-
-  async function addRecBook(book, status) {
-    await addToLibrary(userId, book, status)
-    setMyBookIds(prev => new Set([...prev, book.id]))
-  }
-
-  if (loading) return <Spinner text="Loading activity…" />
-
-  if (!feed.length && !received.length) {
-    return <EmptyState icon="📡" message="No activity yet"
-      sub="Add friends to see what they're reading and rating" />
-  }
-
-  return (
-    <div style={{ maxWidth: 600 }}>
-      {/* Received recommendations */}
-      {received.length > 0 && (
-        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 18, marginBottom: 28 }}>
-          <h3 style={{ margin: '0 0 16px', color: C.text, fontSize: 15, fontFamily: f.sans, fontWeight: 700 }}>
-            📬 Recommended to You ({received.length})
-          </h3>
-          {received.map(rec => (
-            <div key={rec.id} style={{
-              display: 'flex', gap: 14, paddingBottom: 14, marginBottom: 14,
-              borderBottom: `1px solid ${C.border}`,
-            }}>
-              <div style={{ flexShrink: 0, cursor: 'pointer' }}
-                onClick={() => setModal({ type: 'search', book: rec.books })}>
-                {rec.books?.cover_url
-                  ? <img src={rec.books.cover_url} alt={rec.books.title}
-                      style={{ width: 48, height: 72, objectFit: 'cover', borderRadius: 5 }} />
-                  : <NoCover title={rec.books?.title} width={48} height={72} />
-                }
-              </div>
-              <div style={{ flex: 1 }}>
-                <p style={{ margin: '0 0 2px', fontWeight: 700, fontSize: 14, color: C.text, fontFamily: f.sans }}>
-                  {rec.books?.title}
-                </p>
-                <p style={{ margin: '0 0 4px', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
-                  From {rec.fromProfile?.display_name || rec.fromProfile?.username || 'a friend'}
-                  {' · '}{timeAgo(rec.created_at)}
-                </p>
-                {rec.message && (
-                  <p style={{ margin: '0 0 8px', fontSize: 12, color: C.text, fontStyle: 'italic', fontFamily: f.sans }}>
-                    "{rec.message}"
+        {outgoing.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <p style={{ margin: '0 0 8px', fontSize: 12, fontWeight: 700, color: C.muted, fontFamily: f.sans,
+              textTransform: 'uppercase', letterSpacing: '0.06em' }}>Sent Requests</p>
+            {outgoing.map(f => (
+              <div key={f.id} style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '10px 0', borderBottom: `1px solid ${C.border}`,
+              }}>
+                <div>
+                  <p style={{ margin: 0, color: C.text, fontFamily: f.sans }}>
+                    {f.addresseeProfile?.display_name || f.addresseeProfile?.username || 'Unknown'}
                   </p>
-                )}
-                {!myBookIds.has(rec.book_id) && (
-                  <button onClick={() => addRecBook(rec.books, 'want_to_read')}
-                    style={btn('accent', 'sm')}>+ Add to Queue</button>
-                )}
+                  <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans }}>Pending…</p>
+                </div>
+                <button onClick={() => remove(f.id)} style={btn('subtle', 'sm')}>Cancel</button>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
+        )}
+      </Accordion>
+
+      <Accordion icon="🍿" title={`Your Friends (${friends.length})`} defaultOpen>
+        {loading ? <Spinner /> : friends.length === 0
+          ? <EmptyState icon="👥" message="No friends yet" sub="Search above to find other readers" />
+          : [...friends].sort((a, b) => (tasteMap[b.friendId] || 0) - (tasteMap[a.friendId] || 0)).map(f => (
+              <div key={f.id} style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '12px 0', borderBottom: `1px solid ${C.border}`, gap: 12,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <TasteMatchRing pct={tasteMap[f.friendId] || 0} avatar={f.friendProfile?.avatar_url} />
+                  <div>
+                    <p style={{ margin: 0, fontWeight: 700, fontSize: 14, color: C.text, fontFamily: f.sans }}>
+                      {f.friendProfile?.display_name || f.friendProfile?.username || 'Unknown'}
+                    </p>
+                    <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans }}>
+                      @{f.friendProfile?.username}
+                    </p>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
+                  <button onClick={() => setFriendView(f.friendProfile)}
+                    style={{ ...btn('ghost', 'sm'), fontSize: 13 }}>
+                    View List →
+                  </button>
+                  <button onClick={() => setRecommendTo(f.friendProfile)}
+                    title="Send a book"
+                    style={{
+                      width: 32, height: 32, borderRadius: '50%', border: `1px solid ${C.border}`,
+                      background: C.surface2, color: C.primary, cursor: 'pointer', fontSize: 14,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                    }}>✈️</button>
+                  <button onClick={() => remove(f.id)}
+                    title="Unfriend"
+                    style={{
+                      width: 24, height: 24, border: 'none', background: 'none',
+                      color: C.muted, cursor: 'pointer', fontSize: 16, lineHeight: 1, flexShrink: 0,
+                    }}>⋯</button>
+                </div>
+              </div>
+            ))
+        }
+      </Accordion>
+
+      {recommendTo && (
+        <RecommendPopover userId={userId} friend={recommendTo} onClose={() => setRecommendTo(null)} />
+      )}
+
+      {/* Aggregated friends' shelf */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '28px 0 14px', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <SectionBadge icon="👥" bg={C.primary} />
+          <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontWeight: 700, fontFamily: f.sans }}>Friends</h2>
+          <button onClick={() => setShowShelfFilter(o => !o)} style={{
+            background: 'none', border: 'none', color: C.primary, fontFamily: f.sans,
+            fontSize: 13, fontWeight: 700, cursor: 'pointer', padding: 0, textDecoration: 'underline',
+          }}>
+            {shelfVisible.length}
+          </button>
+        </div>
+        <button onClick={() => setShowShelfFilter(o => !o)} style={{ ...pill(showShelfFilter), fontSize: 12 }}>
+          Filter ▾
+        </button>
+      </div>
+
+      {showShelfFilter && (
+        <div style={{
+          background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10,
+          padding: 14, marginBottom: 20,
+        }}>
+          <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+            textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Filter</p>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {FRIEND_STATUS_FILTERS.map(([key, lbl]) => (
+              <button key={key} onClick={() => setStatusFilter(key)} style={pill(statusFilter === key)}>
+                {lbl}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
-      {/* Activity feed */}
-      <h3 style={{ margin: '0 0 16px', color: C.text, fontSize: 15, fontFamily: f.sans, fontWeight: 700 }}>
-        🕐 Recent Activity
-      </h3>
-
-      {feed.map(ub => {
-        const profile = profileMap[ub.user_id]
-        const book = ub.books || {}
-        return (
-          <div key={ub.id} style={{
-            display: 'flex', gap: 14, paddingBottom: 16, marginBottom: 16,
-            borderBottom: `1px solid ${C.border}`,
+      {shelfLoading ? <Spinner /> : shelfVisible.length === 0
+        ? <EmptyState icon="📚" message="Nothing here yet" sub="Add friends to see what they're reading" />
+        : (
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
+            gap: 16,
           }}>
-            <div style={{ flexShrink: 0, cursor: 'pointer' }}
-              onClick={() => setModal({ type: 'friendbook', book, userBook: ub })}>
-              {book.cover_url
-                ? <img src={book.cover_url} alt={book.title}
-                    style={{ width: 48, height: 72, objectFit: 'cover', borderRadius: 5 }} />
-                : <NoCover title={book.title} width={48} height={72} />
-              }
-            </div>
-            <div style={{ flex: 1 }}>
-              <p style={{ margin: '0 0 4px', fontSize: 14, color: C.text, fontFamily: f.sans }}>
-                <span style={{ fontWeight: 700 }}>{profile?.display_name || profile?.username || 'Someone'}</span>
-                {' '}
-                <span style={{ color: C.muted }}>
-                  {ub.status === 'reading' ? 'is reading' : ub.status === 'read' ? 'finished' : 'added to queue'}
-                </span>
-              </p>
-              <p style={{ margin: '0 0 4px', fontWeight: 700, fontSize: 13, color: C.text, fontFamily: f.sans }}>
-                {book.title}
-              </p>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <StatusBadge status={ub.status} />
-                {ub.rating && <StarRating value={ub.rating} readonly size={13} />}
-                <span style={{ fontSize: 11, color: C.muted, fontFamily: f.sans }}>
-                  {timeAgo(ub.updated_at)}
-                </span>
+            {shelfVisible.map(ub => (
+              <div key={ub.id}>
+                <PosterCard userBook={ub} onClick={() => setModal({ book: ub.books, userBook: ub })} />
+                <p style={{ margin: '4px 0 0', fontSize: 10, color: C.muted, fontFamily: f.sans,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {profileMap[ub.user_id]?.display_name || profileMap[ub.user_id]?.username || ''}
+                </p>
               </div>
-            </div>
+            ))}
           </div>
         )
-      })}
+      }
 
       {modal && (
-        <BookDetailModal
-          item={modal.type === 'friendbook' ? modal.book : modal.book}
-          userId={userId}
+        <BookDetailModal item={modal.book} userId={userId}
           onClose={() => setModal(null)}
-          onUpdate={() => { setModal(null); loadActivity() }}
-        />
+          onUpdate={() => loadFriendships()} />
       )}
     </div>
   )
@@ -2300,56 +3577,171 @@ function ActivityPage({ userId }) {
 // ================================================================
 // Profile page – avatar, stats, username, top 10
 // ================================================================
-function ProfilePage({ userId, profile, onProfileUpdate, onSignOut }) {
+function Switch({ checked, onChange }) {
+  return (
+    <button onClick={onChange} style={{
+      width: 46, height: 26, borderRadius: 20, border: 'none', cursor: 'pointer',
+      background: checked ? C.primary : C.surface2, position: 'relative', flexShrink: 0,
+      transition: 'background 0.15s', WebkitTapHighlightColor: 'transparent',
+    }}>
+      <span style={{
+        position: 'absolute', top: 3, left: checked ? 23 : 3, width: 20, height: 20, borderRadius: '50%',
+        background: '#fff', transition: 'left 0.15s', boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
+      }} />
+    </button>
+  )
+}
+
+function StatBar({ label, icon, value, max, color }) {
+  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+      <span style={{
+        width: 130, flexShrink: 0, fontSize: 13, color: C.text, fontFamily: f.sans, fontWeight: 600,
+        display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      }}>
+        {icon} {label}
+      </span>
+      <div style={{ flex: 1, height: 10, borderRadius: 6, background: C.surface2, overflow: 'hidden' }}>
+        <div style={{ width: `${pct}%`, height: '100%', borderRadius: 6, background: color, transition: 'width 0.3s' }} />
+      </div>
+      <span style={{ width: 34, textAlign: 'right', fontSize: 15, fontWeight: 700, color: C.text, fontFamily: f.sans, flexShrink: 0 }}>
+        {value}
+      </span>
+    </div>
+  )
+}
+
+function StatsModal({ fictionCount, nonfictionCount, genreBreakdown, onClose }) {
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const ftMax    = Math.max(fictionCount, nonfictionCount, 1)
+  const genreMax = Math.max(1, ...genreBreakdown.map(([, n]) => n))
+
+  return (
+    <div onClick={(e) => e.target === e.currentTarget && onClose()} style={{
+      position: 'fixed', inset: 0, zIndex: 1100,
+      background: 'rgba(5,4,15,0.88)', backdropFilter: 'blur(6px)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+    }}>
+      <div style={{
+        background: C.surface, borderRadius: 14, padding: 28, maxWidth: 440, width: '100%',
+        maxHeight: '82vh', overflowY: 'auto',
+        border: `1px solid ${C.border}`, boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+          <h2 style={{ margin: 0, color: C.text, fontFamily: f.serif, fontSize: 22, fontWeight: 700 }}>Your Stats</h2>
+          <button onClick={onClose} style={{
+            width: 32, height: 32, borderRadius: '50%', border: `1px solid ${C.border}`, background: 'none',
+            color: C.text, fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>×</button>
+        </div>
+
+        <p style={{ margin: '0 0 14px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+          textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Fiction vs Non-Fiction</p>
+        <StatBar label="Fiction" icon="📖" value={fictionCount} max={ftMax} color={C.primary} />
+        <StatBar label="Non-Fiction" icon="📘" value={nonfictionCount} max={ftMax} color={C.accent} />
+
+        {genreBreakdown.length > 0 && (
+          <>
+            <div style={{ borderTop: `1px solid ${C.border}`, margin: '10px 0 20px' }} />
+            <p style={{ margin: '0 0 14px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+              textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Top Genres</p>
+            {genreBreakdown.map(([g, n]) => (
+              <StatBar key={g} label={g} value={n} max={genreMax} color={C.primaryDim} />
+            ))}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Settings-panel row — label left, control right, hairline divider below.
+function SettingsRow({ label, children }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14,
+      padding: '14px 0', borderBottom: `1px solid ${C.border}`,
+    }}>
+      <span style={{ fontSize: 14, fontWeight: 600, color: C.text, fontFamily: f.sans, flexShrink: 0 }}>{label}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>{children}</div>
+    </div>
+  )
+}
+function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme, toggleTheme, onOpenList, onGoFriends }) {
+  const booksRef = useRef(null)
   const [displayName, setDisplayName] = useState(profile?.display_name || '')
   const [username,    setUsername]    = useState(profile?.username || '')
   const [avatar,      setAvatar]      = useState(profile?.avatar_url || '')
   const [saving,      setSaving]      = useState(false)
   const [msg,         setMsg]         = useState(null)
-  const [stats,       setStats]       = useState(null)
-  const [topBooks,    setTopBooks]    = useState([])
+  const [allBooks,    setAllBooks]    = useState([])
+  const [loadingBooks,setLoadingBooks]= useState(true)
+  const [friendCount, setFriendCount] = useState(0)
   const [follows,     setFollows]     = useState([])
   const [modal,       setModal]       = useState(null)
   const [showImport,  setShowImport]  = useState(false)
+  const [showSettings,     setShowSettings]     = useState(false)
+  const [showAvatarPicker, setShowAvatarPicker] = useState(false)
+  const [showStats,        setShowStats]        = useState(false)
+  const [showBookFilter,   setShowBookFilter]   = useState(false)
+  const [bookSort,   setBookSort]   = useState('default')
+  const [bookStatus, setBookStatus] = useState('all')
 
+  // Keep local fields in sync if profile prop refreshes from elsewhere
   useEffect(() => {
-    // Load stats
-    supabase.from('user_books').select('status, rating, books(*)').eq('user_id', userId)
-      .then(({ data }) => {
-        if (!data) return
-        setStats({
-          total:       data.length,
-          read:        data.filter(u => u.status === 'read').length,
-          reading:     data.filter(u => u.status === 'reading').length,
-          wantToRead:  data.filter(u => u.status === 'want_to_read').length,
-        })
-        const top = data.filter(u => (u.rating || 0) >= 4 && u.status === 'read')
-          .sort((a, b) => (b.rating - a.rating))
-          .slice(0, 10)
-        setTopBooks(top)
-      })
-    // Load author follows
+    setDisplayName(profile?.display_name || '')
+    setUsername(profile?.username || '')
+    setAvatar(profile?.avatar_url || '')
+  }, [profile])
+
+  const loadProfileData = useCallback(async () => {
+    setLoadingBooks(true)
+    const { data } = await supabase.from('user_books').select('*, books(*)').eq('user_id', userId)
+      .order('updated_at', { ascending: false })
+    setAllBooks(data || [])
+    setLoadingBooks(false)
+
+    const { count } = await supabase.from('friendships')
+      .select('id', { count: 'exact', head: true }).eq('status', 'accepted')
+      .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`)
+    setFriendCount(count || 0)
+
     supabase.from('author_follows').select('author').eq('user_id', userId)
       .then(({ data }) => setFollows(data || []))
   }, [userId])
 
-  async function saveProfile() {
+  useEffect(() => { loadProfileData() }, [loadProfileData])
+
+  async function saveProfile(overrides = {}) {
+    const nextAvatar = overrides.avatar_url ?? avatar
     if (!username.trim()) { setMsg({ type: 'error', text: 'Username is required.' }); return }
     setSaving(true)
     const { error } = await supabase.from('profiles').upsert({
       id: userId,
-      display_name: displayName.trim(),
+      display_name: (overrides.display_name ?? displayName).trim(),
       username: username.toLowerCase().trim(),
-      avatar_url: avatar || profile?.avatar_url || autoAvatar(''),
+      avatar_url: nextAvatar || profile?.avatar_url || autoAvatar(''),
     }, { onConflict: 'id' })
     setSaving(false)
     if (error) {
       setMsg({ type: 'error', text: `Save failed: ${error.message}` })
     } else {
-      setMsg({ type: 'success', text: 'Profile saved! ✓' })
+      setMsg({ type: 'success', text: 'Saved ✓' })
       onProfileUpdate?.()
-      setTimeout(() => setMsg(null), 2500)
+      setTimeout(() => setMsg(null), 2000)
     }
+  }
+
+  function pickAvatar(e) {
+    const next = avatar === e ? '' : e
+    setAvatar(next)
+    saveProfile({ avatar_url: next })
   }
 
   async function unfollowAuthor(author) {
@@ -2357,106 +3749,223 @@ function ProfilePage({ userId, profile, onProfileUpdate, onSignOut }) {
     setFollows(prev => prev.filter(f => f.author !== author))
   }
 
-  const sectionLabel = (text) => (
-    <p style={{ margin: '0 0 10px', fontSize: 11, color: C.muted, fontFamily: f.sans,
-      textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>{text}</p>
-  )
-  const cardStyle = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20, marginBottom: 20 }
+  const stats = {
+    read:       allBooks.filter(u => u.status === 'read').length,
+    reading:    allBooks.filter(u => u.status === 'reading').length,
+    wantToRead: allBooks.filter(u => u.status === 'want_to_read').length,
+    rated:      allBooks.filter(u => (u.rating || 0) > 0).length,
+  }
+  const topBooks = allBooks.filter(u => (u.rating || 0) >= 4 && u.status === 'read')
+    .sort((a, b) => (b.rating - a.rating)).slice(0, 10)
+
+  const fictionCount    = allBooks.filter(u => !bookGenres(u.books).some(g => NONFICTION_GENRES.has(g))).length
+  const nonfictionCount = allBooks.length - fictionCount
+  const genreBreakdown  = useMemo(() => {
+    const list = topCategories(allBooks.map(u => u.books || {}), 8)
+    return list.map(g => [g, allBooks.filter(u => bookGenres(u.books).includes(g)).length])
+  }, [allBooks])
+
+  const visibleBooks = (() => {
+    let list = bookStatus === 'all' ? allBooks
+      : bookStatus === 'rated' ? allBooks.filter(u => (u.rating || 0) > 0)
+      : allBooks.filter(u => u.status === bookStatus)
+    if (bookSort === 'top_rated') return [...list].sort((a, b) => (b.rating || 0) - (a.rating || 0))
+    if (bookSort === 'recent') return list // already fetched updated_at desc
+    return [...list].sort((a, b) => {
+      if (!!b.top_10 !== !!a.top_10) return b.top_10 ? 1 : -1
+      return (b.rating || 0) - (a.rating || 0)
+    })
+  })()
 
   return (
-    <div style={{ maxWidth: 600 }}>
-      {/* Avatar + account */}
-      <div style={cardStyle}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-          <div>
-            {sectionLabel('Account')}
-            <p style={{ margin: 0, color: C.muted, fontFamily: f.sans, fontSize: 13 }}>
-              Signed in with your email
-            </p>
-          </div>
-          <button onClick={onSignOut} style={{
-            ...btn('danger', 'sm'), flexShrink: 0,
-          }}>
-            Sign Out
-          </button>
+    <div>
+      {/* Header — avatar + welcome + date */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{
+            width: 44, height: 44, borderRadius: '50%',
+            background: `linear-gradient(135deg, ${C.primaryDim}, ${C.surface2})`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22,
+            border: `2px solid ${C.border}`, flexShrink: 0,
+          }}>{profile?.avatar_url || '📚'}</div>
+          <h1 style={{ margin: 0, color: C.text, fontFamily: f.serif, fontSize: 21, fontWeight: 700 }}>
+            Welcome, {profile?.display_name || profile?.username || 'Reader'} 👋
+          </h1>
         </div>
-
-        {sectionLabel('Profile Avatar')}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 14, padding: '10px 14px',
-          background: C.surface2, borderRadius: 8, marginBottom: 12,
-        }}>
-          <span style={{ fontSize: 40 }}>{avatar || '📚'}</span>
-          <span style={{ color: C.muted, fontFamily: f.sans, fontSize: 13 }}>
-            Tap an icon below to change · tap again to clear
-          </span>
-        </div>
-        <div style={{
-          display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(38px, 1fr))', gap: 6, marginBottom: 20,
-        }}>
-          {LITERARY_EMOJIS.map(e => (
-            <button key={e} onClick={() => setAvatar(avatar === e ? '' : e)}
-              style={{
-                fontSize: 22, padding: '6px 4px', border: 'none', cursor: 'pointer',
-                borderRadius: 8, background: avatar === e ? C.primary : C.surface2,
-                transition: 'background 0.15s', WebkitTapHighlightColor: 'transparent',
-              }}>{e}</button>
-          ))}
-        </div>
-
-        {sectionLabel('Display Name')}
-        <input style={{ ...inputStyle, marginBottom: 12 }}
-          value={displayName} onChange={e => setDisplayName(e.target.value)}
-          placeholder="Your Name" />
-
-        {sectionLabel('Username')}
-        <input style={{ ...inputStyle, marginBottom: 20 }}
-          value={username} onChange={e => setUsername(e.target.value.replace(/\s/g, '').toLowerCase())}
-          placeholder="your_username" />
-
-        {msg && (
-          <p style={{ margin: '0 0 12px', fontSize: 13, fontFamily: f.sans,
-            color: msg.type === 'success' ? C.success : C.danger }}>
-            {msg.text}
-          </p>
-        )}
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <button onClick={saveProfile} disabled={saving} style={btn('primary')}>
-            {saving ? 'Saving…' : 'Save Profile'}
-          </button>
-          <button onClick={() => setShowImport(true)} style={btn('ghost')}>
-            📥 Import Library
-          </button>
-        </div>
+        <span style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, flexShrink: 0 }}>
+          {new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
+        </span>
       </div>
 
-      {/* Reading stats */}
-      {stats && (
-        <div style={cardStyle}>
-          {sectionLabel('Reading Stats')}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+      {/* Stats row */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24, gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 40, flexWrap: 'wrap' }}>
+          {[
+            ['Read', stats.read, () => onOpenList?.('read', true)],
+            ['Friends', friendCount, () => onGoFriends?.()],
+            ['Rated', stats.rated, () => {
+              setBookStatus('rated'); setShowBookFilter(false)
+              booksRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            }],
+          ].map(([lbl, n, onClick]) => (
+            <button key={lbl} onClick={onClick} style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left',
+            }}>
+              <div style={{ fontSize: 26, fontWeight: 800, color: C.primary, fontFamily: f.sans, lineHeight: 1.2 }}>{n}</div>
+              <div style={{ fontSize: 12, color: C.muted, fontFamily: f.sans, textDecoration: 'underline' }}>{lbl}</div>
+            </button>
+          ))}
+        </div>
+        <button onClick={() => setShowStats(true)} style={btn('ghost', 'sm')}>Stats</button>
+      </div>
+
+      {/* Settings accordion */}
+      <button onClick={() => setShowSettings(o => !o)} style={{
+        width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+        background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10,
+        padding: '13px 16px', marginBottom: showSettings ? 4 : 28, cursor: 'pointer',
+        fontFamily: f.sans, fontSize: 14, fontWeight: 700, color: C.text,
+      }}>
+        {showSettings ? '▲ Close Settings' : 'Edit Profile · Settings'}
+      </button>
+
+      {showSettings && (
+        <div style={{
+          background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10,
+          padding: '4px 18px', marginBottom: 28,
+        }}>
+          <SettingsRow label="🌙 Night mode">
+            <Switch checked={theme === 'dark'} onChange={toggleTheme} />
+          </SettingsRow>
+
+          <SettingsRow label="Display initials">
+            <div style={{
+              width: 32, height: 32, borderRadius: 8, background: C.surface2,
+              border: `1px solid ${C.border}`, display: 'flex', alignItems: 'center',
+              justifyContent: 'center', fontSize: 14, fontWeight: 700, color: C.muted, fontFamily: f.sans,
+            }}>
+              {(displayName || username || 'R')[0].toUpperCase()}
+            </div>
+          </SettingsRow>
+
+          <SettingsRow label="Account">
+            <span style={{ color: C.muted, fontFamily: f.sans, fontSize: 13 }}>{email}</span>
+          </SettingsRow>
+
+          <SettingsRow label="Avatar">
+            <span style={{ fontSize: 22 }}>{avatar || '📚'}</span>
+            <button onClick={() => setShowAvatarPicker(o => !o)} style={{
+              background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 13,
+              display: 'flex', alignItems: 'center', gap: 2,
+            }}>
+              {showAvatarPicker ? '▴' : '▾'}
+            </button>
+          </SettingsRow>
+          {showAvatarPicker && (
+            <div style={{
+              display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(36px, 1fr))', gap: 6,
+              padding: '12px 0 16px',
+            }}>
+              {LITERARY_EMOJIS.map(e => (
+                <button key={e} onClick={() => pickAvatar(e)}
+                  style={{
+                    fontSize: 20, padding: '6px 4px', border: 'none', cursor: 'pointer',
+                    borderRadius: 8, background: avatar === e ? C.primary : C.surface2,
+                    transition: 'background 0.15s', WebkitTapHighlightColor: 'transparent',
+                  }}>{e}</button>
+              ))}
+            </div>
+          )}
+
+          <SettingsRow label="Username">
+            <input value={username}
+              onChange={e => setUsername(e.target.value.replace(/\s/g, '').toLowerCase())}
+              placeholder="your_username"
+              style={{ ...inputStyle, width: 140, padding: '7px 10px', fontSize: 13 }} />
+            <button onClick={() => saveProfile()} disabled={saving} style={btn('primary', 'sm')}>
+              {saving ? '…' : 'Save'}
+            </button>
+          </SettingsRow>
+
+          <SettingsRow label="Import">
+            <button onClick={() => setShowImport(true)} style={btn('ghost', 'sm')}>📥 Import</button>
+          </SettingsRow>
+
+          <div style={{ padding: '14px 0' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 14, fontWeight: 600, color: C.text, fontFamily: f.sans }}>Account</span>
+              <button onClick={onSignOut} style={btn('danger', 'sm')}>Sign Out</button>
+            </div>
+          </div>
+
+          {msg && (
+            <p style={{ margin: '0 0 12px', fontSize: 13, fontFamily: f.sans,
+              color: msg.type === 'success' ? C.success : C.danger }}>{msg.text}</p>
+          )}
+        </div>
+      )}
+
+      {/* My Books */}
+      <div ref={booksRef} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontWeight: 700, fontFamily: f.sans }}>My Books</h2>
+          <button onClick={() => onOpenList?.('all', false)} style={{
+            background: 'none', border: 'none', color: C.primary, fontFamily: f.sans,
+            fontSize: 13, fontWeight: 600, cursor: onOpenList ? 'pointer' : 'default', padding: 0,
+            textDecoration: onOpenList ? 'underline' : 'none',
+          }}>
+            {allBooks.length} titles
+          </button>
+        </div>
+        <button onClick={() => setShowBookFilter(o => !o)} style={{ ...pill(showBookFilter), fontSize: 12 }}>
+          Filter ▾
+        </button>
+      </div>
+
+      {showBookFilter && (
+        <div style={{
+          background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10,
+          padding: 14, marginBottom: 16,
+        }}>
+          <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+            textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Sort</p>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+            {READ_SORTS.map(([key, lbl]) => (
+              <button key={key} onClick={() => setBookSort(key)} style={pill(bookSort === key)}>{lbl}</button>
+            ))}
+          </div>
+          <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+            textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Status</p>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {[
-              ['📚', 'Total', stats.total],
-              ['✅', 'Read', stats.read],
-              ['📖', 'Reading', stats.reading],
-              ['🔖', 'Want', stats.wantToRead],
-            ].map(([icon, lbl, n]) => (
-              <div key={lbl} style={{
-                background: C.surface2, borderRadius: 8, padding: '12px 8px', textAlign: 'center',
-              }}>
-                <div style={{ fontSize: 22, marginBottom: 4 }}>{icon}</div>
-                <div style={{ fontSize: 22, fontWeight: 700, color: C.text, fontFamily: f.sans }}>{n}</div>
-                <div style={{ fontSize: 11, color: C.muted, fontFamily: f.sans }}>{lbl}</div>
-              </div>
+              ['all', 'All'], ['reading', `${STATUS_ICONS.reading} Reading`],
+              ['want_to_read', `${STATUS_ICONS.want_to_read} Want to Read`], ['read', `${STATUS_ICONS.read} Read`],
+              ['rated', '⭐ Rated'],
+            ].map(([key, lbl]) => (
+              <button key={key} onClick={() => setBookStatus(key)} style={{ ...pill(bookStatus === key), fontSize: 12 }}>{lbl}</button>
             ))}
           </div>
         </div>
       )}
 
+      {loadingBooks ? <Spinner /> : visibleBooks.length === 0
+        ? <EmptyState icon="📚" message="No books match this filter" />
+        : (
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 16, marginBottom: 36,
+          }}>
+            {visibleBooks.map(ub => (
+              <PosterCard key={ub.id} userBook={ub} onClick={() => setModal(ub)} />
+            ))}
+          </div>
+        )
+      }
+
       {/* Top 10 favorites */}
       {topBooks.length > 0 && (
-        <div style={cardStyle}>
-          {sectionLabel(`⭐ My Top ${topBooks.length} Books`)}
+        <div style={{ marginBottom: 36 }}>
+          <p style={{ margin: '0 0 14px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+            textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>⭐ My Top {topBooks.length} Books</p>
           <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 8, scrollbarWidth: 'none' }}>
             {topBooks.map(ub => (
               <div key={ub.id} style={{ flexShrink: 0 }}>
@@ -2472,8 +3981,9 @@ function ProfilePage({ userId, profile, onProfileUpdate, onSignOut }) {
 
       {/* Author follows */}
       {follows.length > 0 && (
-        <div style={cardStyle}>
-          {sectionLabel('Authors You Follow')}
+        <div style={{ marginBottom: 36 }}>
+          <p style={{ margin: '0 0 14px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+            textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Authors You Follow</p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {follows.map(f => (
               <div key={f.author} style={{
@@ -2491,17 +4001,22 @@ function ProfilePage({ userId, profile, onProfileUpdate, onSignOut }) {
         </div>
       )}
 
+      {showStats && (
+        <StatsModal fictionCount={fictionCount} nonfictionCount={nonfictionCount}
+          genreBreakdown={genreBreakdown} onClose={() => setShowStats(false)} />
+      )}
+
       {modal && (
         <BookDetailModal item={modal} userId={userId}
           onClose={() => setModal(null)}
-          onUpdate={() => setModal(null)} />
+          onUpdate={() => loadProfileData()} />
       )}
       {showImport && (
         <ImportModal
           userId={userId}
-          existingBookIds={new Set(topBooks.map(ub => ub.book_id))}
+          existingBookIds={new Set(allBooks.map(ub => ub.book_id))}
           onClose={() => setShowImport(false)}
-          onDone={() => { onProfileUpdate?.(); setShowImport(false) }}
+          onDone={() => { loadProfileData(); setShowImport(false) }}
         />
       )}
     </div>
@@ -2816,7 +4331,7 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
 
   const FORMAT_LABELS = { goodreads: 'Goodreads', amazon: 'Amazon', audible: 'Audible' }
   const FORMAT_ICONS  = { goodreads: '📗', amazon: '📦', audible: '🎧' }
-  const STATUS_MAP_LABEL = { read: '✅ Read', reading: '📖 Reading', want_to_read: '🔖 Want to Read' }
+  const STATUS_MAP_LABEL = { read: '✅ Read', reading: '▶ Reading', want_to_read: '👀 Want to Read' }
 
   return (
     <div onClick={e => e.target === e.currentTarget && onClose()}
@@ -3039,91 +4554,266 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
 }
 
 // ================================================================
+// Activity Feed – bell icon, friends' latest reading actions
+// ================================================================
+function relativeTime(iso) {
+  if (!iso) return ''
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000
+  if (diff < 60) return 'just now'
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+function activitySentence(row) {
+  const name  = row.profile?.display_name || row.profile?.username || 'A friend'
+  const title = row.books?.title || 'a book'
+  if (row.status === 'read') {
+    return row.rating
+      ? `${name} just read ${title} and rated it ${'★'.repeat(row.rating)}`
+      : `${name} just finished reading ${title}`
+  }
+  if (row.status === 'reading')      return `${name} started reading ${title}`
+  if (row.status === 'want_to_read') return `${name} wants to read ${title}`
+  return `${name} updated ${title}`
+}
+
+function ActivityFeedModal({ userId, onClose }) {
+  const [rows, setRows] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      const { data: fships } = await supabase.from('friendships').select('*')
+        .eq('status', 'accepted').or(`requester_id.eq.${userId},addressee_id.eq.${userId}`)
+      const friendIds = (fships || []).map(f => f.requester_id === userId ? f.addressee_id : f.requester_id)
+      if (friendIds.length === 0) { if (!cancelled) setRows([]); return }
+      const [{ data: activity }, { data: profiles }] = await Promise.all([
+        supabase.from('user_books').select('*, books(*)').in('user_id', friendIds)
+          .order('updated_at', { ascending: false }).limit(30),
+        supabase.from('profiles').select('*').in('id', friendIds),
+      ])
+      const pm = Object.fromEntries((profiles || []).map(p => [p.id, p]))
+      const merged = (activity || []).map(r => ({ ...r, profile: pm[r.user_id] }))
+      if (!cancelled) setRows(merged)
+    }
+    load()
+    return () => { cancelled = true }
+  }, [userId])
+
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div onClick={(e) => e.target === e.currentTarget && onClose()} style={{
+      position: 'fixed', inset: 0, zIndex: 1100,
+      background: 'rgba(5,4,15,0.88)', backdropFilter: 'blur(6px)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+    }}>
+      <div style={{
+        background: C.surface, borderRadius: 14, padding: 24, maxWidth: 440, width: '100%',
+        maxHeight: '78vh', display: 'flex', flexDirection: 'column',
+        border: `1px solid ${C.border}`, boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <h3 style={{ margin: 0, color: C.text, fontFamily: f.serif, fontSize: 18 }}>🔔 Activity</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 20, cursor: 'pointer' }}>×</button>
+        </div>
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+          {rows === null ? <Spinner /> : rows.length === 0
+            ? <EmptyState icon="🔔" message="No recent activity" sub="Add friends to see what they're reading" />
+            : rows.map(r => (
+              <div key={r.id} style={{
+                display: 'flex', alignItems: 'flex-start', gap: 10,
+                padding: '10px 0', borderBottom: `1px solid ${C.border}`,
+              }}>
+                <span style={{ fontSize: 18, flexShrink: 0 }}>{r.profile?.avatar_url || '👤'}</span>
+                <div style={{ minWidth: 0 }}>
+                  <p style={{ margin: 0, fontSize: 13, color: C.text, fontFamily: f.sans, lineHeight: 1.4 }}>
+                    {activitySentence(r)}
+                  </p>
+                  <p style={{ margin: '2px 0 0', fontSize: 11, color: C.muted, fontFamily: f.sans }}>
+                    {relativeTime(r.updated_at)}
+                  </p>
+                </div>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
+// Messages – paper-plane icon, inbox of book recommendations sent/received
+// ================================================================
+function MessagesModal({ userId, onClose }) {
+  const [tab,      setTab]      = useState('received')
+  const [received, setReceived] = useState(null)
+  const [sent,     setSent]     = useState(null)
+  const [addingId, setAddingId] = useState(null)
+  const [addedIds, setAddedIds] = useState(new Set())
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      const [{ data: rec }, { data: snt }] = await Promise.all([
+        supabase.from('book_recommendations').select('*, books(*)').eq('to_user_id', userId).order('created_at', { ascending: false }),
+        supabase.from('book_recommendations').select('*, books(*)').eq('from_user_id', userId).order('created_at', { ascending: false }),
+      ])
+      const ids = [...new Set([...(rec || []).map(r => r.from_user_id), ...(snt || []).map(r => r.to_user_id)])]
+      const { data: profiles } = ids.length ? await supabase.from('profiles').select('*').in('id', ids) : { data: [] }
+      const pm = Object.fromEntries((profiles || []).map(p => [p.id, p]))
+      if (cancelled) return
+      setReceived((rec || []).map(r => ({ ...r, profile: pm[r.from_user_id] })))
+      setSent((snt || []).map(r => ({ ...r, profile: pm[r.to_user_id] })))
+    }
+    load()
+    return () => { cancelled = true }
+  }, [userId])
+
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  async function addToLibraryFromRec(rec) {
+    setAddingId(rec.id)
+    try {
+      await addToLibrary(userId, rec.books, 'want_to_read')
+      setAddedIds(prev => new Set([...prev, rec.id]))
+    } catch (e) { alert(e.message) }
+    setAddingId(null)
+  }
+
+  const list = tab === 'received' ? received : sent
+
+  return (
+    <div onClick={(e) => e.target === e.currentTarget && onClose()} style={{
+      position: 'fixed', inset: 0, zIndex: 1100,
+      background: 'rgba(5,4,15,0.88)', backdropFilter: 'blur(6px)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+    }}>
+      <div style={{
+        background: C.surface, borderRadius: 14, padding: 24, maxWidth: 440, width: '100%',
+        maxHeight: '78vh', display: 'flex', flexDirection: 'column',
+        border: `1px solid ${C.border}`, boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <h3 style={{ margin: 0, color: C.text, fontFamily: f.serif, fontSize: 18 }}>✈️ Messages</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 20, cursor: 'pointer' }}>×</button>
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          <button onClick={() => setTab('received')} style={pill(tab === 'received')}>Received</button>
+          <button onClick={() => setTab('sent')} style={pill(tab === 'sent')}>Sent</button>
+        </div>
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+          {list === null ? <Spinner /> : list.length === 0
+            ? <EmptyState icon="✈️" message={tab === 'received' ? 'No books sent to you yet' : "You haven't sent any books yet"}
+                sub="Send a book to a friend from the Friends tab" />
+            : list.map(rec => (
+              <div key={rec.id} style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+                padding: '10px 0', borderBottom: `1px solid ${C.border}`,
+              }}>
+                <div style={{ minWidth: 0 }}>
+                  <p style={{ margin: 0, fontSize: 13, color: C.text, fontFamily: f.sans, fontWeight: 600,
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {rec.books?.title}
+                  </p>
+                  <p style={{ margin: '2px 0 0', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
+                    {tab === 'received' ? 'from ' : 'to '}
+                    {rec.profile?.display_name || rec.profile?.username || 'Unknown'} · {relativeTime(rec.created_at)}
+                  </p>
+                </div>
+                {tab === 'received' && (
+                  addedIds.has(rec.id)
+                    ? <span style={{ fontSize: 12, color: C.success, fontWeight: 700, fontFamily: f.sans, flexShrink: 0 }}>✓ Added</span>
+                    : <button onClick={() => addToLibraryFromRec(rec)} disabled={addingId === rec.id}
+                        style={{ ...btn('ghost', 'sm'), flexShrink: 0 }}>
+                        {addingId === rec.id ? '…' : '+ Add'}
+                      </button>
+                )}
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
 // Nav
 // ================================================================
-function Nav({ view, setView, profile, theme, toggleTheme }) {
+const NAV_TABS = [
+  ['home',     '🏠', 'Home'],
+  ['discover', '✨', 'Discover'],
+  ['search',   '🔍', 'Search'],
+  ['friends',  '👥', 'Friends'],
+  ['profile',  '👤', 'Profile'],
+]
+
+function Nav({ view, setView, userId, onAddClick, onActivityClick, onMessagesClick }) {
   const isMobile = useIsMobile()
-  const tabs = [
-    ['home',    '🏠', 'Home'],
-    ['mylist',  '📚', 'My List'],
-    ['friends', '👥', 'Friends'],
-    ['activity','📡', 'Activity'],
-  ]
-  const avatarEmoji = profile?.avatar_url || '👤'
+
+  const iconBtn = {
+    background: 'none', border: 'none', cursor: 'pointer', color: C.text,
+    fontSize: 18, width: 32, height: 32, display: 'flex', alignItems: 'center',
+    justifyContent: 'center', borderRadius: 8, flexShrink: 0,
+    WebkitTapHighlightColor: 'transparent',
+  }
+
   return (
     <nav style={{
       background: C.nav, borderBottom: `1px solid ${C.border}`,
       position: 'sticky', top: 0, zIndex: 100,
     }}>
+      {/* Brand row */}
       <div style={{
-        maxWidth: 960, margin: '0 auto', padding: isMobile ? '0 10px' : '0 20px',
-        display: 'flex', alignItems: 'center', height: 52,
+        maxWidth: 960, margin: '0 auto', padding: isMobile ? '10px 12px' : '12px 20px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       }}>
-        {/* Logo */}
         <div style={{
-          fontFamily: f.serif, fontWeight: 700, fontSize: isMobile ? 16 : 18,
-          color: C.text, marginRight: isMobile ? 8 : 28, letterSpacing: '-0.01em', flexShrink: 0,
+          fontFamily: f.serif, fontWeight: 700, fontSize: isMobile ? 17 : 19,
+          color: C.text, letterSpacing: '-0.01em', display: 'flex', alignItems: 'center', gap: 8,
         }}>
-          {isMobile ? '📚' : '📚 BookList'}
+          📚 BookList
         </div>
-
-        {/* Tabs */}
-        <div style={{ display: 'flex', flex: 1, gap: isMobile ? 0 : 2 }}>
-          {tabs.map(([key, icon, lbl]) => (
-            <button key={key} onClick={() => setView(key)} style={{
-              padding: isMobile ? '8px 10px' : '8px 14px',
-              border: 'none', cursor: 'pointer',
-              background: 'none', fontFamily: f.sans, fontSize: 13, fontWeight: 600,
-              color: view === key ? C.primary : C.muted,
-              borderBottom: view === key ? `2px solid ${C.primary}` : '2px solid transparent',
-              transition: 'color 0.15s', display: 'flex', alignItems: 'center', gap: 4,
-              WebkitTapHighlightColor: 'transparent',
-            }}>
-              <span style={{ fontSize: isMobile ? 18 : 14 }}>{icon}</span>
-              {!isMobile && lbl}
-            </button>
-          ))}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <button onClick={onAddClick} title="Add a book" style={iconBtn}>+</button>
+          <button onClick={onActivityClick} title="Activity" style={iconBtn}>🔔</button>
+          <button onClick={onMessagesClick} title="Messages" style={{ ...iconBtn, fontSize: 16 }}>✈️</button>
         </div>
+      </div>
 
-        {/* Theme toggle */}
-        <button onClick={toggleTheme} title={theme === 'dark' ? 'Switch to day mode' : 'Switch to night mode'}
-          style={{
-            background: C.surface2, border: `1px solid ${C.border}`,
-            borderRadius: 20, cursor: 'pointer', fontSize: 16,
-            width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            flexShrink: 0, marginRight: isMobile ? 6 : 12, transition: 'background 0.2s',
+      {/* Tab row */}
+      <div style={{
+        maxWidth: 960, margin: '0 auto', padding: isMobile ? '0 8px 10px' : '0 16px 12px',
+        display: 'flex', gap: 4,
+      }}>
+        {NAV_TABS.map(([key, icon, lbl]) => (
+          <button key={key} onClick={() => setView(key)} style={{
+            flex: isMobile ? 1 : 'initial',
+            padding: isMobile ? '8px 4px' : '8px 16px',
+            border: 'none', cursor: 'pointer', borderRadius: 20,
+            background: view === key ? `${C.primary}26` : 'transparent',
+            fontFamily: f.sans, fontSize: 13, fontWeight: 600,
+            color: view === key ? C.primary : C.muted,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            transition: 'background 0.15s, color 0.15s',
             WebkitTapHighlightColor: 'transparent',
           }}>
-          {theme === 'dark' ? '☀️' : '🌙'}
-        </button>
-
-        {/* Profile chip */}
-        <button onClick={() => setView('profile')} style={{
-          display: 'flex', alignItems: 'center', gap: 9,
-          background: 'none', border: 'none', cursor: 'pointer',
-          padding: '4px 6px', borderRadius: 24, flexShrink: 0,
-          outline: view === 'profile' ? `2px solid ${C.primary}` : 'none',
-          transition: 'outline 0.15s', WebkitTapHighlightColor: 'transparent',
-        }}>
-          <div style={{
-            width: 34, height: 34, borderRadius: '50%',
-            background: `linear-gradient(135deg, ${C.primaryDim}, ${C.surface2})`,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 18, flexShrink: 0,
-            border: `2px solid ${view === 'profile' ? C.primary : C.border}`,
-          }}>
-            {avatarEmoji}
-          </div>
-          {profile && !isMobile && (
-            <span style={{
-              fontSize: 14, fontFamily: f.sans, fontWeight: 600,
-              color: view === 'profile' ? C.text : C.muted,
-              maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>
-              {profile.display_name || profile.username}
-            </span>
-          )}
-        </button>
+            <span style={{ fontSize: isMobile ? 17 : 14 }}>{icon}</span>
+            {!isMobile && lbl}
+          </button>
+        ))}
       </div>
     </nav>
   )
@@ -3137,7 +4827,12 @@ export default function App() {
   const [session, setSession] = useState(undefined)
   const [profile, setProfile] = useState(null)
   const [view,    setView]    = useState('home')
+  const [drillIn, setDrillIn] = useState(null) // { filter } — full My List view, opened from Home
   const [theme,   setTheme]   = useState(() => localStorage.getItem('bl-theme') || 'dark')
+  const [globalAdd,   setGlobalAdd]   = useState(false) // header + button — general add-a-book modal
+  const [globalModal, setGlobalModal] = useState(null)  // BookDetailModal opened from that modal
+  const [showActivity, setShowActivity] = useState(false) // header bell — activity feed
+  const [showMessages, setShowMessages] = useState(false) // header plane — messages inbox
 
   // Apply theme before render — all components read module-level C
   C = theme === 'light' ? LIGHT_THEME : DARK_THEME
@@ -3225,17 +4920,56 @@ export default function App() {
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg }}>
-      <Nav view={view} setView={setView} profile={profile} theme={theme} toggleTheme={toggleTheme} />
+      <Nav view={view} setView={(v) => { setDrillIn(null); setView(v) }} userId={userId}
+        onAddClick={() => setGlobalAdd(true)}
+        onActivityClick={() => setShowActivity(true)}
+        onMessagesClick={() => setShowMessages(true)} />
       <main style={{ maxWidth: 960, margin: '0 auto', padding: isMobile ? '20px 12px 60px' : '32px 20px 80px' }}>
-        {view === 'home'     && <HomePage     userId={userId} setView={setView} />}
-        {view === 'mylist'   && <MyListPage   userId={userId} />}
-        {view === 'friends'  && <FriendsPage  userId={userId} />}
-        {view === 'activity' && <ActivityPage userId={userId} />}
-        {view === 'profile'  && <ProfilePage  userId={userId} profile={profile}
-          onSignOut={() => supabase.auth.signOut()}
-          onProfileUpdate={() => supabase.from('profiles').select('*').eq('id', userId).maybeSingle()
-            .then(({ data }) => { if (data) setProfile(data) })} />}
+        {drillIn ? (
+          <MyListPage userId={userId} initialFilter={drillIn.filter}
+            lockedFilter={drillIn.locked ? drillIn.filter : null}
+            onBack={() => setDrillIn(null)} />
+        ) : (
+          <>
+            {view === 'home'     && <HomePage     userId={userId}
+              onOpenList={(filter, locked) => setDrillIn({ filter, locked })} />}
+            {view === 'discover' && <DiscoverPage userId={userId} />}
+            {view === 'search'   && <SearchPage   userId={userId} />}
+            {view === 'friends'  && <FriendsPage  userId={userId} />}
+            {view === 'profile'  && <ProfilePage  userId={userId} email={session.user.email} profile={profile}
+              theme={theme} toggleTheme={toggleTheme}
+              onSignOut={() => supabase.auth.signOut()}
+              onOpenList={(filter, locked) => setDrillIn({ filter, locked })}
+              onGoFriends={() => setView('friends')}
+              onProfileUpdate={() => supabase.from('profiles').select('*').eq('id', userId).maybeSingle()
+                .then(({ data }) => { if (data) setProfile(data) })} />}
+          </>
+        )}
       </main>
+
+      {globalAdd && (
+        <AddBookModal
+          userId={userId}
+          onClose={() => setGlobalAdd(false)}
+          onOpenModal={(item) => { setGlobalAdd(false); setGlobalModal(item) }}
+        />
+      )}
+
+      {globalModal && (
+        <BookDetailModal
+          item={globalModal.type === 'library' ? globalModal.userBook : (globalModal.book || globalModal.userBook?.books)}
+          userId={userId}
+          onClose={() => setGlobalModal(null)}
+          onUpdate={() => {}}
+        />
+      )}
+
+      {showActivity && (
+        <ActivityFeedModal userId={userId} onClose={() => setShowActivity(false)} />
+      )}
+      {showMessages && (
+        <MessagesModal userId={userId} onClose={() => setShowMessages(false)} />
+      )}
     </div>
   )
 }
