@@ -200,7 +200,11 @@ async function upsertBook(book) {
     publisher: book.publisher || null, subtitle: book.subtitle || null,
     average_rating: book.average_rating || null, ratings_count: book.ratings_count || null,
   }, { onConflict: 'id' })
-  if (error) console.error('upsertBook:', error)
+  // This used to only console.error and swallow the failure, which let
+  // callers march on to insert into user_books anyway — and THAT insert
+  // would then fail with a confusing foreign-key-violation instead of the
+  // real underlying reason the book row itself couldn't be saved.
+  if (error) { console.error('upsertBook:', error); throw error }
 }
 
 async function addToLibrary(userId, book, status) {
