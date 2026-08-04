@@ -4166,6 +4166,7 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
   const [displayName, setDisplayName] = useState(profile?.display_name || '')
   const [username,    setUsername]    = useState(profile?.username || '')
   const [avatar,      setAvatar]      = useState(profile?.avatar_url || '')
+  const [initials,    setInitials]    = useState(profile?.initials || '')
   const [saving,      setSaving]      = useState(false)
   const [msg,         setMsg]         = useState(null)
   const [allBooks,    setAllBooks]    = useState([])
@@ -4186,6 +4187,7 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
     setDisplayName(profile?.display_name || '')
     setUsername(profile?.username || '')
     setAvatar(profile?.avatar_url || '')
+    setInitials(profile?.initials || '')
   }, [profile])
 
   const loadProfileData = useCallback(async () => {
@@ -4215,6 +4217,7 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
       display_name: (overrides.display_name ?? displayName).trim(),
       username: username.toLowerCase().trim(),
       avatar_url: nextAvatar || profile?.avatar_url || autoAvatar(''),
+      initials: (overrides.initials ?? initials).trim().toUpperCase().slice(0, 2) || null,
     }, { onConflict: 'id' })
     setSaving(false)
     if (error) {
@@ -4328,9 +4331,18 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
               width: 32, height: 32, borderRadius: 8, background: C.surface2,
               border: `1px solid ${C.border}`, display: 'flex', alignItems: 'center',
               justifyContent: 'center', fontSize: 14, fontWeight: 700, color: C.muted, fontFamily: f.sans,
+              flexShrink: 0,
             }}>
-              {(displayName || username || 'R')[0].toUpperCase()}
+              {initials || (displayName || username || 'R')[0].toUpperCase()}
             </div>
+            <input value={initials}
+              onChange={e => setInitials(e.target.value.replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, 2))}
+              placeholder="e.g. GS"
+              maxLength={2}
+              style={{ ...inputStyle, width: 60, padding: '7px 10px', fontSize: 13, textAlign: 'center' }} />
+            <button onClick={() => saveProfile()} disabled={saving} style={btn('primary', 'sm')}>
+              Save
+            </button>
           </SettingsRow>
 
           <SettingsRow label="Account">
