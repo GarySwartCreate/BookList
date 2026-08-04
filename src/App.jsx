@@ -458,8 +458,8 @@ function PosterCard({ book, userBook, onClick, width, height, quickActions }) {
   const [hovered, setHovered] = useState(false)
   const touchStartRef = useRef(null)
   const isMobile = useIsMobile()
-  if (width == null)  width  = isMobile ? 100 : 120
-  if (height == null) height = isMobile ? 150 : 180
+  if (width == null)  width  = isMobile ? 106 : 120
+  if (height == null) height = isMobile ? 159 : 180
   const cover = book?.cover_url || userBook?.books?.cover_url || null
   const title = book?.title || userBook?.books?.title || ''
   const authors = book?.authors || userBook?.books?.authors || []
@@ -657,8 +657,8 @@ function SearchResultCard({ book, userId, myBookIds, onAdded, onOpenModal }) {
 // ================================================================
 function AddTile({ onClick, label = 'Add', width, height }) {
   const isMobile = useIsMobile()
-  if (width == null)  width  = isMobile ? 100 : 120
-  if (height == null) height = isMobile ? 150 : 180
+  if (width == null)  width  = isMobile ? 106 : 120
+  if (height == null) height = isMobile ? 159 : 180
   return (
     <button onClick={onClick} style={{
       width, height, flexShrink: 0, borderRadius: 8,
@@ -775,6 +775,7 @@ function Accordion({ icon, title, defaultOpen = false, children }) {
 // HorizontalRow – scrollable shelf row
 // ================================================================
 function HorizontalRow({ title, icon, iconBg, items, renderItem, emptyMsg, loading, seeAllAction, onAdd, addLabel = 'Add', rightAction, belowHeader }) {
+  const isMobile = useIsMobile()
   const Header = seeAllAction ? 'button' : 'div'
   return (
     <div style={{ marginBottom: 36 }}>
@@ -796,7 +797,7 @@ function HorizontalRow({ title, icon, iconBg, items, renderItem, emptyMsg, loadi
       {belowHeader}
       {loading ? <Spinner /> : (
         <div style={{
-          display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 8,
+          display: 'flex', gap: isMobile ? 9 : 12, overflowX: 'auto', paddingBottom: 8,
           paddingRight: 20,
           scrollbarWidth: 'none', msOverflowStyle: 'none',
           WebkitOverflowScrolling: 'touch',
@@ -2158,8 +2159,8 @@ function HomePage({ userId, onOpenList }) {
           : (
             <div style={{
               display: 'grid',
-              gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 100 : 120}px, 1fr))`,
-              gap: isMobile ? 12 : 16,
+              gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
+              gap: isMobile ? 9 : 16,
             }}>
               {read.map(ub => (
                 <PosterCard key={ub.id} userBook={ub}
@@ -2287,8 +2288,8 @@ function SearchPage({ userId }) {
             : (
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 100 : 120}px, 1fr))`,
-                gap: isMobile ? 12 : 16,
+                gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
+                gap: isMobile ? 9 : 16,
               }}>
                 {searchRes.map(book => (
                   <SearchResultCard key={book.id} book={book} userId={userId}
@@ -2383,8 +2384,8 @@ function DiscoverSectionBody({ expanded, loading, items, renderItem, emptyMsg })
   return expanded ? (
     <div style={{
       display: 'grid',
-      gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 100 : 120}px, 1fr))`,
-      gap: isMobile ? 12 : 16,
+      gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
+      gap: isMobile ? 9 : 16,
     }}>
       {items.map(renderItem)}
     </div>
@@ -2890,8 +2891,8 @@ function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack
         : (
           <div style={{
             display: 'grid',
-            gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 100 : 120}px, 1fr))`,
-            gap: isMobile ? 12 : 16,
+            gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
+            gap: isMobile ? 9 : 16,
           }}>
             {visible.map((ub, idx) => (
               <div key={ub.id}
@@ -3142,8 +3143,8 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
           : (
             <div style={{
               display: 'grid',
-              gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 100 : 120}px, 1fr))`,
-              gap: isMobile ? 12 : 16,
+              gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
+              gap: isMobile ? 9 : 16,
             }}>
               {read.map(renderTile)}
             </div>
@@ -3565,8 +3566,8 @@ function FriendsPage({ userId }) {
         : (
           <div style={{
             display: 'grid',
-            gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 100 : 120}px, 1fr))`,
-            gap: isMobile ? 12 : 16,
+            gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
+            gap: isMobile ? 9 : 16,
           }}>
             {shelfVisible.map(ub => (
               <div key={ub.id}>
@@ -3970,8 +3971,8 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
         : (
           <div style={{
             display: 'grid',
-            gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 100 : 120}px, 1fr))`,
-            gap: isMobile ? 12 : 16, marginBottom: 36,
+            gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
+            gap: isMobile ? 9 : 16, marginBottom: 36,
           }}>
             {visibleBooks.map(ub => (
               <PosterCard key={ub.id} userBook={ub} onClick={() => setModal(ub)} />
