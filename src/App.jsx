@@ -4523,7 +4523,7 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
 }
 
 // ================================================================
-// CSV Import Modal – Goodreads · Amazon · Audible
+// CSV Import Modal – Goodreads · Audible
 // ================================================================
 
 // ── CSV parser (handles quoted fields, escaped quotes) ───────────
@@ -4552,7 +4552,6 @@ function parseCSV(text) {
 function detectCSVFormat(headers) {
   const h = new Set(headers.map(x => x.toLowerCase()))
   if (h.has('exclusive shelf') || h.has('bookshelves')) return 'goodreads'
-  if (h.has('asin/isbn') || (h.has('order id') && h.has('title'))) return 'amazon'
   if (h.has('narrators') || h.has('narrator') || h.has('purchase date') || (h.has('asin') && h.has('authors'))) return 'audible'
   return null
 }
@@ -4577,18 +4576,6 @@ function mapImportRow(row, fmt, defaultStatus = 'read') {
       status: GR_SHELF[row['Exclusive Shelf']] || 'want_to_read',
       rating: (rating && rating > 0) ? rating : null,
       notes:  row['My Review'] || '',
-    }
-  }
-  if (fmt === 'amazon') {
-    const cat = (row['Category'] || '').toLowerCase()
-    if (!cat.includes('book') && !cat.includes('kindle') && !cat.includes('digital')) return null
-    return {
-      title:  row['Title'] || '',
-      author: '',
-      isbn:   (row['ASIN/ISBN'] || '').replace(/[="]/g, '') || null,
-      status: defaultStatus,
-      rating: null,
-      notes:  '',
     }
   }
   if (fmt === 'audible') {
@@ -4785,7 +4772,7 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
         const parsed = parseCSV(ev.target.result)
         if (!parsed.length) { setErr('File appears empty.'); return }
         const fmt = detectCSVFormat(Object.keys(parsed[0]))
-        if (!fmt) { setErr('Could not detect format. Supported: Goodreads, Amazon orders, Audible library.'); return }
+        if (!fmt) { setErr('Could not detect format. Supported: Goodreads and Audible library CSVs.'); return }
         // For Goodreads, status comes from the file; for others default to 'read'
         const initDefault = fmt === 'goodreads' ? null : 'read'
         if (initDefault) setDefaultStatus(initDefault)
@@ -4800,10 +4787,10 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
   }
 
   async function handleImport() {
-    // Re-apply defaultStatus for formats where it's user-chosen
-    const finalRows = format === 'goodreads'
-      ? rows
-      : rows.map(r => ({ ...r, status: defaultStatus }))
+    // Status/rating are edited directly on `rows` in the preview table now
+    // (per-row dropdowns/stars, or the "Set all as" bulk buttons), so no
+    // override is needed here — just import what's on screen.
+    const finalRows = rows
     setStep('importing')
     setProgress([0, finalRows.length])
     let imported = 0, skipped = 0, failed = 0
@@ -4828,8 +4815,8 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
     setStep('done')
   }
 
-  const FORMAT_LABELS = { goodreads: 'Goodreads', amazon: 'Amazon', audible: 'Audible' }
-  const FORMAT_ICONS  = { goodreads: '📗', amazon: '📦', audible: '🎧' }
+  const FORMAT_LABELS = { goodreads: 'Goodreads', audible: 'Audible' }
+  const FORMAT_ICONS  = { goodreads: '📗', audible: '🎧' }
   const STATUS_MAP_LABEL = { read: '✅ Read', reading: '▶ Reading', want_to_read: '👀 Want to Read' }
 
   return (
@@ -4859,7 +4846,7 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
           📥 Import Library
         </h2>
         <p style={{ margin: '0 0 20px', color: C.muted, fontFamily: f.sans, fontSize: 13 }}>
-          Supports Goodreads export, Amazon order history, and Audible library CSVs.
+          Supports Goodreads and Audible library CSVs.
         </p>
 
         {/* UPLOAD */}
@@ -4888,25 +4875,51 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
                 Click or drag a CSV file here
               </p>
               <p style={{ margin: 0, color: C.muted, fontFamily: f.sans, fontSize: 12 }}>
-                Goodreads · Amazon orders · Audible library
+                Goodreads · Audible library
               </p>
             </div>
             <input ref={fileRef} type="file" accept=".csv,text/csv"
               onChange={handleFile} style={{ display: 'none' }} />
             {err && <p style={{ marginTop: 12, color: C.danger, fontFamily: f.sans, fontSize: 13 }}>{err}</p>}
 
-            <div style={{ marginTop: 20, padding: 14, background: C.surface2, borderRadius: 8 }}>
-              <p style={{ margin: '0 0 8px', color: C.text, fontFamily: f.sans, fontSize: 12, fontWeight: 700 }}>How to export:</p>
-              <p style={{ margin: '0 0 4px', color: C.muted, fontFamily: f.sans, fontSize: 12 }}>
-                <strong style={{ color: C.text }}>Goodreads:</strong> My Books → Import/Export → Export Library
-              </p>
-              <p style={{ margin: '0 0 4px', color: C.muted, fontFamily: f.sans, fontSize: 12 }}>
-                <strong style={{ color: C.text }}>Amazon:</strong> Account → Order History → Request Report
-              </p>
-              <p style={{ margin: 0, color: C.muted, fontFamily: f.sans, fontSize: 12 }}>
-                <strong style={{ color: C.text }}>Audible:</strong> Use the "Audible Library Exporter" browser extension
-              </p>
+            <div style={{ marginTop: 20, padding: 16, background: C.surface2, borderRadius: 8 }}>
+              <p style={{ margin: '0 0 12px', color: C.text, fontFamily: f.sans, fontSize: 12, fontWeight: 700,
+                textTransform: 'uppercase', letterSpacing: '0.06em' }}>How to export</p>
+
+              <div style={{ marginBottom: 14 }}>
+                <p style={{ margin: '0 0 4px', color: C.text, fontFamily: f.sans, fontSize: 13, fontWeight: 700 }}>
+                  📗 Goodreads
+                </p>
+                <p style={{ margin: '0 0 4px', color: C.muted, fontFamily: f.sans, fontSize: 12, lineHeight: 1.5 }}>
+                  Go to your <a href="https://www.goodreads.com/review/import" target="_blank" rel="noopener noreferrer"
+                    style={{ color: C.primary }}>Import/Export page</a>, then click "Export Library." Goodreads emails
+                  you a link to the CSV — it can take a minute or two to generate.
+                </p>
+              </div>
+
+              <div>
+                <p style={{ margin: '0 0 4px', color: C.text, fontFamily: f.sans, fontSize: 13, fontWeight: 700 }}>
+                  🎧 Audible
+                </p>
+                <p style={{ margin: '0 0 4px', color: C.muted, fontFamily: f.sans, fontSize: 12, lineHeight: 1.5 }}>
+                  Audible doesn't offer a built-in export, but the free{' '}
+                  <a href="https://chromewebstore.google.com/detail/audible-library-extractor/deifcolkciolkllaikijldnjeloeaall"
+                    target="_blank" rel="noopener noreferrer" style={{ color: C.primary }}>Audible Library Extractor</a>{' '}
+                  extension works well. Install it, open your Audible library, then use its "Extension tools" menu to
+                  export a CSV.
+                </p>
+                <p style={{ margin: 0, color: C.muted, fontFamily: f.sans, fontSize: 12, lineHeight: 1.5, fontStyle: 'italic' }}>
+                  Tip: when exporting, pick the <strong style={{ color: C.text }}>"Goodreads"</strong> compatibility
+                  option instead of "Raw data" — it carries over your finished/currently-listening/wishlist status
+                  automatically, so you won't have to set it manually for every title.
+                </p>
+              </div>
             </div>
+
+            <p style={{ margin: '14px 0 0', color: C.muted, fontFamily: f.sans, fontSize: 11, fontStyle: 'italic' }}>
+              Previously exported your Amazon order history? That built-in export was discontinued by Amazon in
+              2023, so it's no longer offered here — Goodreads or Audible cover most libraries just as well.
+            </p>
           </div>
         )}
 
@@ -4928,7 +4941,28 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
               </div>
             </div>
 
-            <div style={{ maxHeight: 320, overflowY: 'auto', marginBottom: 20 }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap',
+              padding: '12px 14px', background: C.surface2, borderRadius: 8,
+            }}>
+              <span style={{ color: C.text, fontFamily: f.sans, fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
+                Set all as:
+              </span>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {Object.entries(STATUS_LABELS).map(([key, lbl]) => (
+                  <button key={key}
+                    onClick={() => { setDefaultStatus(key); setRows(prev => prev.map(r => ({ ...r, status: key }))) }}
+                    style={{ ...pill(defaultStatus === key), fontSize: 12 }}>
+                    {STATUS_ICONS[key]} {lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <p style={{ margin: '0 0 12px', color: C.muted, fontFamily: f.sans, fontSize: 12, fontStyle: 'italic' }}>
+              Detected status and rating per book below — adjust any row before importing.
+            </p>
+
+            <div style={{ maxHeight: 340, overflowY: 'auto', marginBottom: 20 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: f.sans, fontSize: 13 }}>
                 <thead>
                   <tr style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -4952,10 +4986,20 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
                         {r.author}
                       </td>
                       <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>
-                        <StatusBadge status={r.status} />
+                        <select value={r.status}
+                          onChange={e => setRows(prev => prev.map((row, idx) => idx === i ? { ...row, status: e.target.value } : row))}
+                          style={{
+                            background: C.surface2, color: C.text, border: `1px solid ${C.border}`,
+                            borderRadius: 6, padding: '4px 6px', fontFamily: f.sans, fontSize: 12, cursor: 'pointer',
+                          }}>
+                          {Object.entries(STATUS_LABELS).map(([key, lbl]) => (
+                            <option key={key} value={key}>{STATUS_ICONS[key]} {lbl}</option>
+                          ))}
+                        </select>
                       </td>
-                      <td style={{ padding: '7px 8px', color: C.star, whiteSpace: 'nowrap' }}>
-                        {r.rating ? '★'.repeat(r.rating) : <span style={{ color: C.border }}>—</span>}
+                      <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>
+                        <StarRating size={13} value={r.rating}
+                          onChange={val => setRows(prev => prev.map((row, idx) => idx === i ? { ...row, rating: val } : row))} />
                       </td>
                     </tr>
                   ))}
@@ -4964,29 +5008,10 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
               {rows.length > 100 && (
                 <p style={{ textAlign: 'center', color: C.muted, fontFamily: f.sans,
                   fontSize: 12, margin: '10px 0 0' }}>
-                  …and {rows.length - 100} more
+                  …and {rows.length - 100} more (these will still import — only the first 100 are shown/editable here)
                 </p>
               )}
             </div>
-
-            {format !== 'goodreads' && (
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16,
-                padding: '12px 14px', background: C.surface2, borderRadius: 8,
-              }}>
-                <span style={{ color: C.text, fontFamily: f.sans, fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
-                  Import all as:
-                </span>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {Object.entries(STATUS_LABELS).map(([key, lbl]) => (
-                    <button key={key} onClick={() => setDefaultStatus(key)}
-                      style={{ ...pill(defaultStatus === key), fontSize: 12 }}>
-                      {STATUS_ICONS[key]} {lbl}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
 
             <p style={{ margin: '0 0 16px', color: C.muted, fontFamily: f.sans, fontSize: 12 }}>
               BookList will fetch cover art and metadata from Google Books. This may take a moment for large libraries.
