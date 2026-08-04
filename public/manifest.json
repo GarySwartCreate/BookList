@@ -4,7 +4,7 @@
   "description": "Track what you're reading, discover new books, share with friends.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0f1117",
+  "background_color": "#101b29",
   "theme_color": "#7c6ff7",
   "icons": [
     { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },

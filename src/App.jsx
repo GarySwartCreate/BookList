@@ -15,7 +15,7 @@ const GOOGLE_BOOKS_KEY = import.meta.env.VITE_GOOGLE_BOOKS_API_KEY || ''
 
 // ─── Design tokens ───────────────────────────────────────────────
 const DARK_THEME = {
-  bg:         '#0f1117',
+  bg:         '#101b29',
   surface:    '#1a1d2e',
   surface2:   '#242840',
   border:     '#2d3158',
@@ -27,7 +27,7 @@ const DARK_THEME = {
   success:    '#34d399',
   star:       '#f0b429',
   danger:     '#f87171',
-  nav:        '#0a0c18',
+  nav:        '#0a121c',
   overlay:    'rgba(0,0,0,0.85)',
   white:      '#ffffff',
 }
@@ -4880,7 +4880,7 @@ function Nav({ view, setView, userId, onAddClick, onActivityClick, onMessagesCli
     }}>
       {/* Brand row */}
       <div style={{
-        maxWidth: 960, margin: '0 auto', padding: isMobile ? '10px 12px' : '12px 20px',
+        maxWidth: 960, margin: '0 auto', padding: isMobile ? '10px 28px' : '12px 20px',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       }}>
         <div style={{
@@ -5061,7 +5061,7 @@ export default function App() {
         onAddClick={() => setGlobalAdd(true)}
         onActivityClick={() => setShowActivity(true)}
         onMessagesClick={() => setShowMessages(true)} />
-      <main style={{ maxWidth: 960, margin: '0 auto', padding: isMobile ? '20px 12px 84px' : '32px 20px 80px' }}>
+      <main style={{ maxWidth: 960, margin: '0 auto', padding: isMobile ? '20px 28px 84px' : '32px 20px 80px' }}>
         {drillIn ? (
           <MyListPage userId={userId} initialFilter={drillIn.filter}
             lockedFilter={drillIn.locked ? drillIn.filter : null}
