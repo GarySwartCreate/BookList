@@ -996,7 +996,7 @@ function RatingPopup({ title, onRate, onSkip }) {
 // "You finished it!" wizard — WatchList-style: one step at a time
 // (Rate → Notes → Fave → Recommend), each step saving immediately and
 // auto-advancing, instead of asking for just a rating and stopping.
-function FinishedReadingPopup({ title, initialRating, shareFriends, sentTo, onSaveRating, onSaveNotes, onSaveFave, onShareFriend, onFinish }) {
+function FinishedReadingPopup({ title, initialRating, shareFriends, sentTo, linkCopied, onSaveRating, onSaveNotes, onSaveFave, onShareFriend, onShareLink, onFinish }) {
   const [step,      setStep]     = useState(0) // 0 rate · 1 notes · 2 fave · 3 recommend
   const [hovered,   setHovered]  = useState(0)
   const [selected,  setSelected] = useState(initialRating || 0)
@@ -1004,6 +1004,7 @@ function FinishedReadingPopup({ title, initialRating, shareFriends, sentTo, onSa
   const [notes,     setNotes]    = useState('')
   const [faveOn,    setFaveOn]   = useState(false)
   const [busy,      setBusy]     = useState(false)
+  const [recommendMode, setRecommendMode] = useState(null) // null · 'friends' · 'link' · 'both'
 
   useEffect(() => {
     function onKey(e) { if (e.key === 'Escape') onFinish() }
@@ -1125,33 +1126,66 @@ function FinishedReadingPopup({ title, initialRating, shareFriends, sentTo, onSa
             <p style={{ margin: '0 0 18px', color: C.muted, fontFamily: f.sans, fontSize: 13 }}>
               Share <em style={{ color: C.text }}>{title}</em> with friends
             </p>
-            {shareFriends === null ? (
-              <p style={{ fontSize: 13, color: C.muted, fontFamily: f.sans, fontStyle: 'italic', marginBottom: 16 }}>
-                Loading friends…
-              </p>
-            ) : shareFriends.length === 0 ? (
-              <p style={{ fontSize: 13, color: C.muted, fontFamily: f.sans, fontStyle: 'italic', marginBottom: 16 }}>
-                No friends yet
-              </p>
-            ) : (
-              <div style={{ marginBottom: 4 }}>
-                {shareFriends.map(fr => {
-                  const already = sentTo?.has(fr.id)
-                  return (
-                    <button key={fr.id} disabled={already}
-                      onClick={() => onShareFriend(fr.id)}
-                      style={{
-                        ...pillBtn(already ? 'subtle' : 'primary'),
-                        cursor: already ? 'default' : 'pointer',
-                        opacity: already ? 0.6 : 1,
-                      }}>
-                      {already ? `✓ Sent to ${fr.display_name || fr.username}` : `👤 Send to ${fr.display_name || fr.username}`}
-                    </button>
-                  )
-                })}
-              </div>
+
+            {recommendMode === null && (
+              <>
+                <button onClick={() => setRecommendMode('friends')} style={pillBtn('primary')}>
+                  👥 Send to friends in BookList
+                </button>
+                <button onClick={() => { onShareLink(); setRecommendMode('link') }} style={pillBtn('subtle')}>
+                  🔗 Share a link (anyone can click)
+                </button>
+                <button onClick={() => { onShareLink(); setRecommendMode('both') }} style={pillBtn('subtle')}>
+                  ✨ Both
+                </button>
+              </>
             )}
-            <button onClick={onFinish} style={{ ...btn('subtle', 'sm'), marginTop: 8 }}>Done</button>
+
+            {(recommendMode === 'link') && (
+              <p style={{ fontSize: 13, color: C.success, fontFamily: f.sans, fontWeight: 700, marginBottom: 16 }}>
+                {linkCopied ? '🔗 Link copied — paste it anywhere!' : 'Opening your share sheet…'}
+              </p>
+            )}
+
+            {(recommendMode === 'friends' || recommendMode === 'both') && (
+              <>
+                {recommendMode === 'both' && linkCopied && (
+                  <p style={{ fontSize: 13, color: C.success, fontFamily: f.sans, fontWeight: 700, marginBottom: 12 }}>
+                    🔗 Link copied — paste it anywhere!
+                  </p>
+                )}
+                {shareFriends === null ? (
+                  <p style={{ fontSize: 13, color: C.muted, fontFamily: f.sans, fontStyle: 'italic', marginBottom: 16 }}>
+                    Loading friends…
+                  </p>
+                ) : shareFriends.length === 0 ? (
+                  <p style={{ fontSize: 13, color: C.muted, fontFamily: f.sans, fontStyle: 'italic', marginBottom: 16 }}>
+                    No friends yet
+                  </p>
+                ) : (
+                  <div style={{ marginBottom: 4 }}>
+                    {shareFriends.map(fr => {
+                      const already = sentTo?.has(fr.id)
+                      return (
+                        <button key={fr.id} disabled={already}
+                          onClick={() => onShareFriend(fr.id)}
+                          style={{
+                            ...pillBtn(already ? 'subtle' : 'primary'),
+                            cursor: already ? 'default' : 'pointer',
+                            opacity: already ? 0.6 : 1,
+                          }}>
+                          {already ? `✓ Sent to ${fr.display_name || fr.username}` : `👤 Send to ${fr.display_name || fr.username}`}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+
+            <button onClick={onFinish} style={{ ...btn('subtle', 'sm'), marginTop: 8 }}>
+              {recommendMode === null ? 'Skip' : 'Done'}
+            </button>
           </>
         )}
       </div>
@@ -1213,6 +1247,8 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
   const [friendsLoaded,   setFriendsLoaded]   = useState(false)
   const [olDescription,  setOlDescription]  = useState(null)
   const [authorBio,      setAuthorBio]      = useState(null)
+  const [myName,         setMyName]         = useState('')
+  const [linkCopied,     setLinkCopied]     = useState(false)
 
   function flashSaved() {
     setSaved(true)
@@ -1254,6 +1290,31 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  // Own display name, for the "X would like to share this book" link text
+  useEffect(() => {
+    if (!userId) return
+    supabase.from('profiles').select('display_name, username').eq('id', userId).maybeSingle()
+      .then(({ data }) => setMyName(data?.display_name || data?.username || ''))
+  }, [userId])
+
+  // Builds a shareable link to this book and hands it to the OS share sheet
+  // (Messages/Mail/etc. on mobile) or falls back to copying it to the clipboard.
+  async function shareBookLink() {
+    const url = `${window.location.origin}/?share=${encodeURIComponent(book.id)}&by=${encodeURIComponent(userId)}`
+    const text = `${myName || 'A friend'} would like to share "${book?.title}" from their BookList`
+    if (navigator.share) {
+      try { await navigator.share({ title: book?.title, text, url }) } catch (_) { /* user cancelled */ }
+    } else {
+      try {
+        await navigator.clipboard.writeText(`${text}\n${url}`)
+        setLinkCopied(true)
+        setTimeout(() => setLinkCopied(false), 2500)
+      } catch (_) {
+        flashError(new Error('Could not copy the link — please try again.'))
+      }
+    }
+  }
 
   // Check if already following first author
   useEffect(() => {
@@ -1541,10 +1602,12 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
         initialRating={rating}
         shareFriends={shareFriends}
         sentTo={sentTo}
+        linkCopied={linkCopied}
         onSaveRating={handleWizardRating}
         onSaveNotes={handleWizardNotes}
         onSaveFave={handleWizardFave}
         onShareFriend={sendToFriend}
+        onShareLink={shareBookLink}
         onFinish={handleWizardFinish}
       />
     )}
@@ -1828,8 +1891,8 @@ function autoAvatar(email) {
   return LITERARY_EMOJIS[sum % LITERARY_EMOJIS.length]
 }
 
-function AuthPage({ inviteFrom }) {
-  const [mode, setMode] = useState(inviteFrom ? 'signup' : 'signin')
+function AuthPage({ inviteFrom, sharedBookId, sharedBy }) {
+  const [mode, setMode] = useState((inviteFrom || sharedBookId) ? 'signup' : 'signin')
   const [email, setEmail]           = useState('')
   const [password, setPassword]     = useState('')
   const [username, setUsername]     = useState('')
@@ -1837,6 +1900,20 @@ function AuthPage({ inviteFrom }) {
   const [avatar, setAvatar]         = useState('')   // '' = auto-assign at submit
   const [loading, setLoading]       = useState(false)
   const [msg, setMsg]               = useState(null)
+  const [sharedBook,       setSharedBook]       = useState(null)
+  const [sharedByProfile,  setSharedByProfile]  = useState(null)
+
+  // Someone sent a "share a link" invite for a specific book — preview it
+  // (books + profiles are both publicly readable, so this works pre-login)
+  useEffect(() => {
+    if (!sharedBookId) return
+    supabase.from('books').select('*').eq('id', sharedBookId).maybeSingle()
+      .then(({ data }) => setSharedBook(data))
+    if (sharedBy) {
+      supabase.from('profiles').select('display_name, username').eq('id', sharedBy).maybeSingle()
+        .then(({ data }) => setSharedByProfile(data))
+    }
+  }, [sharedBookId, sharedBy])
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -1899,9 +1976,30 @@ function AuthPage({ inviteFrom }) {
             BookList
           </h1>
           <p style={{ margin: 0, color: C.muted, fontSize: 13, fontFamily: f.sans }}>
-            {inviteFrom ? "You've been invited! Create an account to connect." : 'Your literary life, organized'}
+            {sharedBookId
+              ? `${sharedByProfile?.display_name || sharedByProfile?.username || 'A friend'} would like to share this book from their BookList`
+              : inviteFrom ? "You've been invited! Create an account to connect."
+              : 'Your literary life, organized'}
           </p>
         </div>
+
+        {sharedBookId && sharedBook && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24,
+            padding: 12, borderRadius: 10, background: C.surface2, border: `1px solid ${C.border}`,
+          }}>
+            {sharedBook.cover_url
+              ? <img src={sharedBook.cover_url} alt="" style={{ width: 44, height: 66, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />
+              : <NoCover title={sharedBook.title} width={44} height={66} />
+            }
+            <div style={{ minWidth: 0 }}>
+              <p style={{ margin: '0 0 2px', fontWeight: 700, fontSize: 14, color: C.text, fontFamily: f.sans,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sharedBook.title}</p>
+              <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(sharedBook.authors || []).join(', ')}</p>
+            </div>
+          </div>
+        )}
 
         <div style={{ display: 'flex', borderBottom: `1px solid ${C.border}`, marginBottom: 24 }}>
           {tabBtn('signin', 'Sign In')}
@@ -5266,8 +5364,11 @@ export default function App() {
     setTheme(next)
   }
 
-  // Capture invite param on load
-  const inviteFromRef = useRef(new URLSearchParams(window.location.search).get('invite'))
+  // Capture invite / shared-book params on load
+  const inviteFromRef   = useRef(new URLSearchParams(window.location.search).get('invite'))
+  const sharedBookIdRef = useRef(new URLSearchParams(window.location.search).get('share'))
+  const sharedByRef     = useRef(new URLSearchParams(window.location.search).get('by'))
+  const [sharedNotice, setSharedNotice] = useState(null)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session))
@@ -5322,6 +5423,22 @@ export default function App() {
           }
         })
     }
+
+    // Handle a shared-book link — auto-add it to Want to Read once
+    const sharedBookId = sharedBookIdRef.current
+    if (sharedBookId) {
+      sharedBookIdRef.current = null // only once
+      window.history.replaceState({}, '', window.location.pathname)
+      supabase.from('books').select('*').eq('id', sharedBookId).maybeSingle()
+        .then(async ({ data: bookRow }) => {
+          if (!bookRow) return
+          try {
+            await addToLibrary(session.user.id, bookRow, 'want_to_read')
+            setSharedNotice(`✨ Added "${bookRow.title}" to your Want to Read list`)
+            setTimeout(() => setSharedNotice(null), 6000)
+          } catch (_) { /* they may already have it — not worth surfacing */ }
+        })
+    }
   }, [session])
 
   if (session === undefined) {
@@ -5337,12 +5454,22 @@ export default function App() {
     )
   }
 
-  if (!session) return <AuthPage inviteFrom={inviteFromRef.current} />
+  if (!session) return (
+    <AuthPage inviteFrom={inviteFromRef.current}
+      sharedBookId={sharedBookIdRef.current} sharedBy={sharedByRef.current} />
+  )
 
   const userId = session.user.id
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg }}>
+      {sharedNotice && (
+        <div style={{
+          position: 'fixed', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 2000,
+          background: C.success, color: '#0f1117', fontFamily: f.sans, fontSize: 13, fontWeight: 700,
+          padding: '10px 18px', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+        }}>{sharedNotice}</div>
+      )}
       <Nav view={view} setView={(v) => { setDrillIn(null); setView(v) }} userId={userId}
         onAddClick={() => setGlobalAdd(true)}
         onActivityClick={() => setShowActivity(true)}
