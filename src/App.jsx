@@ -88,6 +88,21 @@ const inputStyle = {
   boxSizing: 'border-box',
 }
 
+// Fetch with a hard timeout so a slow/rate-limited API can't hang the UI —
+// aborts and throws instead of leaving the caller waiting indefinitely.
+async function fetchWithTimeout(url, ms = 6000) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), ms)
+  try {
+    return await fetch(url, { signal: controller.signal })
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('Request timed out')
+    throw err
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 // ─── Google Books API ─────────────────────────────────────────────
 async function searchGoogleBooks(query, maxResults = 20) {
   const url = new URL('https://www.googleapis.com/books/v1/volumes')
@@ -95,7 +110,7 @@ async function searchGoogleBooks(query, maxResults = 20) {
   url.searchParams.set('maxResults', String(maxResults))
   url.searchParams.set('printType', 'books')
   if (GOOGLE_BOOKS_KEY) url.searchParams.set('key', GOOGLE_BOOKS_KEY)
-  const res = await fetch(url.toString())
+  const res = await fetchWithTimeout(url.toString())
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err?.error?.message || `Google Books error ${res.status}`)
@@ -110,7 +125,7 @@ async function searchOpenLibrary(query, maxResults = 20) {
   url.searchParams.set('q', query)
   url.searchParams.set('limit', String(maxResults))
   url.searchParams.set('fields', 'key,title,author_name,cover_i,subject,first_publish_year,number_of_pages_median,isbn,publisher')
-  const res = await fetch(url.toString())
+  const res = await fetchWithTimeout(url.toString())
   if (!res.ok) throw new Error(`Open Library error ${res.status}`)
   const data = await res.json()
   return (data.docs || []).map(doc => ({
@@ -2516,6 +2531,118 @@ function DiscoverPage({ userId }) {
   const [picksGenre,  setPicksGenre]  = useState('all')
   const [showPicksFilter, setShowPicksFilter] = useState(false)
 
+  // ── Recommended: explicit shares + friends' 5-star reads + a genre-based filler ──
+  // The four sources below are independent of each other, so they're fetched
+  // concurrently and merged (in priority order) once all have resolved,
+  // instead of awaiting one after another.
+  async function buildRecommended(lib, ids, friendIds, localProfileMap) {
+    const [fromFriendPool, highlyRatedPool, authorPool, genrePool] = await Promise.all([
+      (async () => {
+        const { data: recs } = await supabase.from('book_recommendations').select('*, books(*)')
+          .eq('to_user_id', userId).order('created_at', { ascending: false }).limit(15)
+        if (!recs?.length) return []
+        const fromIds = [...new Set(recs.map(r => r.from_user_id))]
+        const { data: fromProfs } = await supabase.from('profiles').select('id, display_name, username').in('id', fromIds)
+        const pm = Object.fromEntries((fromProfs || []).map(p => [p.id, p]))
+        return recs.filter(r => r.books).map(r => ({
+          ...r.books,
+          reason: `Recommended by ${pm[r.from_user_id]?.display_name || pm[r.from_user_id]?.username || 'a friend'}`,
+          source: 'from_friend',
+        }))
+      })(),
+      (async () => {
+        if (friendIds.length === 0) return []
+        const { data: topFriendReads } = await supabase.from('user_books').select('*, books(*)')
+          .in('user_id', friendIds).eq('rating', 5).limit(20)
+        return (topFriendReads || []).filter(ub => ub.books).map(ub => {
+          const p = localProfileMap[ub.user_id]
+          return { ...ub.books, reason: `${p?.display_name || p?.username || 'A friend'} rated it ★★★★★`, source: 'highly_rated' }
+        })
+      })(),
+      (async () => {
+        try {
+          const { data: follows } = await supabase.from('author_follows').select('author').eq('user_id', userId)
+          if (!follows?.length) return []
+          const author = follows[Math.floor(Math.random() * follows.length)].author
+          const { results } = await searchBooks(`inauthor:"${author}"`, 10)
+          return results.map(b => ({ ...b, reason: `More by ${author}`, source: 'genre' }))
+        } catch (_) { return [] }
+      })(),
+      (async () => {
+        try {
+          const topRated  = lib.filter(u => (u.rating || 0) >= 4)
+          const booksPool = topRated.length > 0 ? topRated : lib
+          const cats      = [...new Set(booksPool.flatMap(u => u.books?.categories || []))]
+          const fallback  = ['literary fiction', 'biography', 'history', 'mystery', 'science', 'fantasy']
+          const pool      = cats.length > 0 ? cats : fallback
+          const shuffled  = [...pool].sort(() => Math.random() - 0.5).slice(0, 2)
+          // Two category searches also run in parallel with each other
+          const perCat = await Promise.all(shuffled.map(cat =>
+            searchBooks(`subject:"${cat}"`, 12).then(({ results }) =>
+              results.map(b => ({ ...b, reason: `Because you liked ${cat}`, source: 'genre' })))
+          ))
+          return perCat.flat()
+        } catch (_) { return [] }
+      })(),
+    ])
+
+    const recPool = []
+    const seen = new Set()
+    for (const b of [...fromFriendPool, ...highlyRatedPool, ...authorPool, ...genrePool]) {
+      if (!b?.id || ids.has(b.id) || seen.has(b.id)) continue
+      seen.add(b.id)
+      recPool.push(b)
+    }
+    setRecommended(recPool)
+  }
+
+  // ── Trending: privacy-safe aggregate across all users (see schema_trending.sql) ──
+  async function buildTrending(ids) {
+    try {
+      const { data: trend, error } = await supabase.rpc('get_trending_books', { days_back: 180, limit_count: 40 })
+      if (!error && trend?.length) {
+        const bookIds = trend.map(t => t.book_id)
+        const { data: trendBooks } = await supabase.from('books').select('*').in('id', bookIds)
+        const bookMap = Object.fromEntries((trendBooks || []).map(b => [b.id, b]))
+        const merged = trend.map(t => ({ ...bookMap[t.book_id], adds: t.adds }))
+          .filter(b => b.id && !ids.has(b.id))
+        if (merged.length > 0) {
+          setTrending(merged)
+          return
+        }
+        throw new Error('no trending data yet')
+      }
+      throw new Error('trending RPC unavailable')
+    } catch (_) {
+      // Fallback (e.g. schema_trending.sql not run yet, or too little usage data so far):
+      // surface currently-popular new releases instead of leaving the section empty.
+      try {
+        const { results } = await searchBooks('new york times bestseller 2026', 20)
+        setTrending(results.filter(b => !ids.has(b.id)).map(b => ({ ...b, reason: 'Popular right now' })))
+      } catch (_) { setTrending([]) }
+    }
+  }
+
+  // ── Picks: curated stand-in lists (no NYT key needed — see PICKS_LISTS) ──
+  async function buildPicks(ids) {
+    try {
+      const shuffledLists = [...PICKS_LISTS].sort(() => Math.random() - 0.5).slice(0, 2)
+      // Both list searches run in parallel with each other
+      const perList = await Promise.all(shuffledLists.map(list =>
+        searchBooks(list.query, 12).then(({ results }) =>
+          results.map(b => ({ ...b, reason: list.label, listKey: list.key })))
+      ))
+      const picksPool = []
+      const seen = new Set()
+      for (const b of perList.flat()) {
+        if (!b?.id || ids.has(b.id) || seen.has(b.id)) continue
+        seen.add(b.id)
+        picksPool.push(b)
+      }
+      setPicks(picksPool)
+    } catch (_) { setPicks([]) }
+  }
+
   const loadDiscoverData = useCallback(async () => {
     setLoading(true)
 
@@ -2547,105 +2674,14 @@ function DiscoverPage({ userId }) {
       setProfileMap({})
     }
 
-    // ── Recommended: explicit shares + friends' 5-star reads + a genre-based filler ──
-    const recPool = []
-    const { data: recs } = await supabase.from('book_recommendations').select('*, books(*)')
-      .eq('to_user_id', userId).order('created_at', { ascending: false }).limit(15)
-    if (recs?.length) {
-      const fromIds = [...new Set(recs.map(r => r.from_user_id))]
-      const { data: fromProfs } = await supabase.from('profiles').select('id, display_name, username').in('id', fromIds)
-      const pm = Object.fromEntries((fromProfs || []).map(p => [p.id, p]))
-      recs.forEach(r => {
-        if (!r.books || ids.has(r.book_id)) return
-        recPool.push({
-          ...r.books,
-          reason: `Recommended by ${pm[r.from_user_id]?.display_name || pm[r.from_user_id]?.username || 'a friend'}`,
-          source: 'from_friend',
-        })
-      })
-    }
-    if (friendIds.length > 0) {
-      const { data: topFriendReads } = await supabase.from('user_books').select('*, books(*)')
-        .in('user_id', friendIds).eq('rating', 5).limit(20)
-      ;(topFriendReads || []).forEach(ub => {
-        if (!ub.books || ids.has(ub.book_id) || recPool.some(b => b.id === ub.book_id)) return
-        const p = localProfileMap[ub.user_id]
-        recPool.push({
-          ...ub.books,
-          reason: `${p?.display_name || p?.username || 'A friend'} rated it ★★★★★`,
-          source: 'highly_rated',
-        })
-      })
-    }
-    // Author-follow recs
-    try {
-      const { data: follows } = await supabase.from('author_follows').select('author').eq('user_id', userId)
-      if (follows?.length > 0) {
-        const author = follows[Math.floor(Math.random() * follows.length)].author
-        const { results } = await searchBooks(`inauthor:"${author}"`, 10)
-        results.forEach(b => {
-          if (ids.has(b.id) || recPool.some(r => r.id === b.id)) return
-          recPool.push({ ...b, reason: `More by ${author}`, source: 'genre' })
-        })
-      }
-    } catch (_) { /* optional */ }
-    // Genre-based recs — pull from two categories instead of one for a fuller shelf
-    try {
-      const topRated  = lib.filter(u => (u.rating || 0) >= 4)
-      const booksPool = topRated.length > 0 ? topRated : lib
-      const cats      = [...new Set(booksPool.flatMap(u => u.books?.categories || []))]
-      const fallback  = ['literary fiction', 'biography', 'history', 'mystery', 'science', 'fantasy']
-      const pool      = cats.length > 0 ? cats : fallback
-      const shuffled  = [...pool].sort(() => Math.random() - 0.5)
-      for (const cat of shuffled.slice(0, 2)) {
-        const { results } = await searchBooks(`subject:"${cat}"`, 12)
-        results.forEach(b => {
-          if (ids.has(b.id) || recPool.some(r => r.id === b.id)) return
-          recPool.push({ ...b, reason: `Because you liked ${cat}`, source: 'genre' })
-        })
-      }
-    } catch (_) { /* optional */ }
-    setRecommended(recPool)
-
-    // ── Trending: privacy-safe aggregate across all users (see schema_trending.sql) ──
-    try {
-      const { data: trend, error } = await supabase.rpc('get_trending_books', { days_back: 180, limit_count: 40 })
-      if (!error && trend?.length) {
-        const bookIds = trend.map(t => t.book_id)
-        const { data: trendBooks } = await supabase.from('books').select('*').in('id', bookIds)
-        const bookMap = Object.fromEntries((trendBooks || []).map(b => [b.id, b]))
-        const merged = trend.map(t => ({ ...bookMap[t.book_id], adds: t.adds }))
-          .filter(b => b.id && !ids.has(b.id))
-        if (merged.length > 0) {
-          setTrending(merged)
-        } else {
-          throw new Error('no trending data yet')
-        }
-      } else {
-        throw new Error('trending RPC unavailable')
-      }
-    } catch (_) {
-      // Fallback (e.g. schema_trending.sql not run yet, or too little usage data so far):
-      // surface currently-popular new releases instead of leaving the section empty.
-      try {
-        const { results } = await searchBooks('new york times bestseller 2026', 20)
-        setTrending(results.filter(b => !ids.has(b.id)).map(b => ({ ...b, reason: 'Popular right now' })))
-      } catch (_) { setTrending([]) }
-    }
-
-    // ── Picks: curated stand-in lists (no NYT key needed — see PICKS_LISTS) ──
-    try {
-      const shuffledLists = [...PICKS_LISTS].sort(() => Math.random() - 0.5).slice(0, 2)
-      const picksPool = []
-      for (const list of shuffledLists) {
-        const { results } = await searchBooks(list.query, 12)
-        results.forEach(b => {
-          if (ids.has(b.id) || picksPool.some(p => p.id === b.id)) return
-          picksPool.push({ ...b, reason: list.label, listKey: list.key })
-        })
-      }
-      setPicks(picksPool)
-    } catch (_) { setPicks([]) }
+    // The three sections below are independent of each other — load them
+    // concurrently instead of chaining one after another. This is what used
+    // to make Discover slow: up to ~6 sequential Google Books calls in a row.
+    await Promise.all([
+      buildRecommended(lib, ids, friendIds, localProfileMap),
+      buildTrending(ids),
+      buildPicks(ids),
+    ])
 
     setLoading(false)
   }, [userId])
