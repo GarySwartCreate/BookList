@@ -377,39 +377,35 @@ function useIsMobile() {
   return isMobile
 }
 
-// Press-and-hold-to-drag reorder — works with mouse AND touch via the unified
-// Pointer Events API (native HTML5 drag-and-drop only fires for mouse, which
-// is why the old draggable/onDragStart approach never worked on phones).
-// A short hold (with minimal movement) arms drag mode; a quick tap/swipe
-// before that timer fires is left alone so scrolling and tapping to open a
-// book keep working exactly as before.
+// Drag-handle reorder — works with mouse AND touch via the unified Pointer
+// Events API (native HTML5 drag-and-drop only fires for mouse, which is why
+// the old draggable/onDragStart approach never worked on phones).
+//
+// A dedicated small grip handle (not the whole tile) owns the pointer
+// events, with touch-action:none set on it from render time. This matters:
+// touch-action is decided by the browser at the START of a touch gesture and
+// can't be changed mid-gesture, so toggling it dynamically on the whole tile
+// (to distinguish "scroll" from "drag") doesn't reliably stop the browser's
+// native swipe-scroll once your finger starts moving. Isolating touch-action:
+// none to a small dedicated handle sidesteps that entirely — grabbing the
+// handle always means "drag", and everywhere else on the tile keeps its
+// normal scroll/tap behavior untouched.
 function useDragReorder(items, onReorder) {
   const [dragIdx, setDragIdx] = useState(null)
   const [overIdx, setOverIdx] = useState(null)
-  const pointers = useRef({})
-  const suppressClick = useRef(false)
+  const activePointerId = useRef(null)
 
-  function onPointerDown(e, idx) {
-    if (e.pointerType === 'mouse' && e.button !== 0) return
-    const pointerId = e.pointerId
-    const st = { armed: false, cancelled: false, startX: e.clientX, startY: e.clientY, idx }
-    pointers.current[pointerId] = st
-    st.timer = setTimeout(() => {
-      if (st.cancelled) return
-      st.armed = true
-      setDragIdx(idx)
-      setOverIdx(idx)
-    }, 300)
+  function onHandlePointerDown(e, idx) {
+    e.preventDefault()
+    e.stopPropagation()
+    activePointerId.current = e.pointerId
+    setDragIdx(idx)
+    setOverIdx(idx)
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch {}
   }
 
-  function onPointerMove(e) {
-    const st = pointers.current[e.pointerId]
-    if (!st) return
-    if (!st.armed) {
-      const dx = e.clientX - st.startX, dy = e.clientY - st.startY
-      if (Math.hypot(dx, dy) > 8) { st.cancelled = true; clearTimeout(st.timer) }
-      return
-    }
+  function onHandlePointerMove(e) {
+    if (activePointerId.current !== e.pointerId) return
     e.preventDefault()
     const el = document.elementFromPoint(e.clientX, e.clientY)
     const target = el?.closest?.('[data-drag-idx]')
@@ -419,37 +415,36 @@ function useDragReorder(items, onReorder) {
     }
   }
 
-  function finish(pointerId) {
-    const st = pointers.current[pointerId]
-    if (!st) return
-    clearTimeout(st.timer)
-    if (st.armed) {
-      suppressClick.current = true
-      setTimeout(() => { suppressClick.current = false }, 0)
-      if (dragIdx !== null && overIdx !== null && dragIdx !== overIdx) {
-        const arr = items.slice()
-        const [moved] = arr.splice(dragIdx, 1)
-        arr.splice(overIdx, 0, moved)
-        onReorder(arr)
-      }
+  function finish(e) {
+    if (activePointerId.current !== e.pointerId) return
+    activePointerId.current = null
+    if (dragIdx !== null && overIdx !== null && dragIdx !== overIdx) {
+      const arr = items.slice()
+      const [moved] = arr.splice(dragIdx, 1)
+      arr.splice(overIdx, 0, moved)
+      onReorder(arr)
     }
     setDragIdx(null); setOverIdx(null)
-    delete pointers.current[pointerId]
   }
 
-  function onPointerUp(e)     { finish(e.pointerId) }
-  function onPointerCancel(e) { finish(e.pointerId) }
-  function onClickCapture(e)  { if (suppressClick.current) { e.preventDefault(); e.stopPropagation() } }
-
-  function bind(idx) {
+  // Spread onto the small grip handle rendered on top of each tile.
+  function handleBind(idx) {
     return {
       'data-drag-idx': idx,
-      onPointerDown: (e) => onPointerDown(e, idx),
-      onPointerMove, onPointerUp, onPointerCancel, onClickCapture,
+      onPointerDown: (e) => onHandlePointerDown(e, idx),
+      onPointerMove: onHandlePointerMove,
+      onPointerUp: finish,
+      onPointerCancel: finish,
+      style: { touchAction: 'none' },
     }
   }
+  // Spread onto the outer tile wrapper so hit-testing can resolve which
+  // tile the pointer is currently over while dragging.
+  function tileProps(idx) {
+    return { 'data-drag-idx': idx }
+  }
 
-  return { dragIdx, overIdx, bind }
+  return { dragIdx, overIdx, handleBind, tileProps }
 }
 
 function timeAgo(dateStr) {
@@ -2114,7 +2109,7 @@ function HomePage({ userId, onOpenList }) {
       reordered.map((ub, idx) => supabase.from('user_books').update({ position: idx }).eq('id', ub.id))
     )
   }
-  const { dragIdx, overIdx, bind } = useDragReorder(wantToRead, persistOrder)
+  const { dragIdx, overIdx, handleBind, tileProps } = useDragReorder(wantToRead, persistOrder)
 
   return (
     <div>
@@ -2140,15 +2135,23 @@ function HomePage({ userId, onOpenList }) {
         items={wantToRead}
         renderItem={(ub, idx) => (
           <div key={ub.id}
-            {...bind(idx)}
+            {...tileProps(idx)}
             style={{
+              position: 'relative',
               opacity: dragIdx === idx ? 0.4 : 1,
               outline: overIdx === idx && dragIdx !== idx ? `2px solid ${C.primary}` : 'none',
-              borderRadius: 10, cursor: 'grab', touchAction: 'pan-x',
+              borderRadius: 10,
             }}
           >
             <PosterCard userBook={ub}
               onClick={() => setModal({ type: 'library', userBook: ub })} />
+            <div {...handleBind(idx)} style={{
+              ...handleBind(idx).style,
+              position: 'absolute', bottom: 4, right: 4, width: 28, height: 28, borderRadius: '50%',
+              background: 'rgba(10,8,24,0.75)', color: '#fff', fontSize: 14,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'grab', zIndex: 2, WebkitTapHighlightColor: 'transparent',
+            }}>⠿</div>
           </div>
         )}
         loading={loadingData}
@@ -2158,7 +2161,7 @@ function HomePage({ userId, onOpenList }) {
       />
       {wantToRead.length > 1 && (
         <p style={{ margin: '-30px 0 20px', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
-          ⠿ Press and hold a cover to drag it and set your priority order
+          ⠿ Drag the grip in the corner of a cover to set your priority order
         </p>
       )}
 
@@ -2850,7 +2853,7 @@ function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack
     : sortDefault(genreFiltered)
 
   // Drag for want_to_read queue — press-and-hold works with mouse AND touch
-  const { dragIdx, overIdx, bind } = useDragReorder(visible, handleReorder)
+  const { dragIdx, overIdx, handleBind, tileProps } = useDragReorder(visible, handleReorder)
 
   return (
     <div>
@@ -2945,18 +2948,27 @@ function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack
           }}>
             {visible.map((ub, idx) => (
               <div key={ub.id}
-                {...(isQueue ? bind(idx) : {})}
+                {...(isQueue ? tileProps(idx) : {})}
                 style={{
+                  position: 'relative',
                   opacity: isQueue && dragIdx === idx ? 0.4 : 1,
                   outline: isQueue && overIdx === idx && dragIdx !== idx ? `2px solid ${C.primary}` : 'none',
                   borderRadius: 10, transition: 'opacity 0.15s',
-                  touchAction: isQueue ? 'pan-y' : undefined,
                 }}
               >
                 <PosterCard
                   userBook={ub}
                   onClick={() => setModal(ub)}
                 />
+                {isQueue && (
+                  <div {...handleBind(idx)} style={{
+                    ...handleBind(idx).style,
+                    position: 'absolute', bottom: 4, right: 4, width: 28, height: 28, borderRadius: '50%',
+                    background: 'rgba(10,8,24,0.75)', color: '#fff', fontSize: 14,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    cursor: 'grab', zIndex: 2, WebkitTapHighlightColor: 'transparent',
+                  }}>⠿</div>
+                )}
               </div>
             ))}
           </div>
