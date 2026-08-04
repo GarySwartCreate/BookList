@@ -147,18 +147,23 @@ async function searchOpenLibrary(query, maxResults = 20) {
   }))
 }
 
-// Try Google Books first, fall back to Open Library on failure
+// Fire both providers at once (rather than only starting Open Library after
+// Google fails/times out) so a slow or rate-limited Google Books call doesn't
+// double the total wait before Open Library gets its own fair shot.
 async function searchBooks(query, maxResults = 20) {
+  const googlePromise = searchGoogleBooks(query, maxResults)
+  const openLibPromise = searchOpenLibrary(query, maxResults)
+  openLibPromise.catch(() => {}) // avoid "unhandled rejection" if Google succeeds and we never touch this
   try {
-    const results = await searchGoogleBooks(query, maxResults)
+    const results = await googlePromise
     if (results.length > 0) return { results, source: 'google' }
-    // Google returned empty — try Open Library
-    const olResults = await searchOpenLibrary(query, maxResults)
+    // Google returned empty — use whatever Open Library comes back with
+    const olResults = await openLibPromise
     return { results: olResults, source: 'openlibrary' }
   } catch (googleErr) {
     console.warn('Google Books failed, trying Open Library:', googleErr.message)
     try {
-      const olResults = await searchOpenLibrary(query, maxResults)
+      const olResults = await openLibPromise
       return { results: olResults, source: 'openlibrary' }
     } catch (olErr) {
       throw new Error('Both search providers failed. Check your connection.')
