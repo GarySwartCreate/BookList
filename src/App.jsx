@@ -454,9 +454,12 @@ function EmptyState({ icon = '📚', message, sub }) {
 // ================================================================
 // PosterCard – book cover tile used everywhere
 // ================================================================
-function PosterCard({ book, userBook, onClick, width = 120, height = 180, quickActions }) {
+function PosterCard({ book, userBook, onClick, width, height, quickActions }) {
   const [hovered, setHovered] = useState(false)
   const touchStartRef = useRef(null)
+  const isMobile = useIsMobile()
+  if (width == null)  width  = isMobile ? 100 : 120
+  if (height == null) height = isMobile ? 150 : 180
   const cover = book?.cover_url || userBook?.books?.cover_url || null
   const title = book?.title || userBook?.books?.title || ''
   const authors = book?.authors || userBook?.books?.authors || []
@@ -652,7 +655,10 @@ function SearchResultCard({ book, userId, myBookIds, onAdded, onOpenModal }) {
 // ================================================================
 // AddTile / SectionBadge / CountPill – WatchList-style row chrome
 // ================================================================
-function AddTile({ onClick, label = 'Add', width = 120, height = 180 }) {
+function AddTile({ onClick, label = 'Add', width, height }) {
+  const isMobile = useIsMobile()
+  if (width == null)  width  = isMobile ? 100 : 120
+  if (height == null) height = isMobile ? 150 : 180
   return (
     <button onClick={onClick} style={{
       width, height, flexShrink: 0, borderRadius: 8,
@@ -1982,6 +1988,7 @@ const READ_SORTS = [
 ]
 
 function HomePage({ userId, onOpenList }) {
+  const isMobile = useIsMobile()
   const [myBooks,      setMyBooks]      = useState([])
   const [loadingData,  setLoadingData]  = useState(true)
   const [modal,        setModal]        = useState(null)
@@ -2151,8 +2158,8 @@ function HomePage({ userId, onOpenList }) {
           : (
             <div style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
-              gap: 16,
+              gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 100 : 120}px, 1fr))`,
+              gap: isMobile ? 12 : 16,
             }}>
               {read.map(ub => (
                 <PosterCard key={ub.id} userBook={ub}
@@ -2190,6 +2197,7 @@ function HomePage({ userId, onOpenList }) {
 // Search page – dedicated search tab
 // ================================================================
 function SearchPage({ userId }) {
+  const isMobile = useIsMobile()
   const [searchQ,      setSearchQ]      = useState('')
   const [searchRes,    setSearchRes]    = useState([])
   const [searching,    setSearching]    = useState(false)
@@ -2279,8 +2287,8 @@ function SearchPage({ userId }) {
             : (
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
-                gap: 16,
+                gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 100 : 120}px, 1fr))`,
+                gap: isMobile ? 12 : 16,
               }}>
                 {searchRes.map(book => (
                   <SearchResultCard key={book.id} book={book} userId={userId}
@@ -2365,6 +2373,7 @@ function DiscoverFilterPanel({ primaryLabel, primaryOptions, primaryValue, onPri
 }
 
 function DiscoverSectionBody({ expanded, loading, items, renderItem, emptyMsg }) {
+  const isMobile = useIsMobile()
   if (loading && !expanded) return <Spinner />
   if (items.length === 0) {
     return expanded
@@ -2372,7 +2381,11 @@ function DiscoverSectionBody({ expanded, loading, items, renderItem, emptyMsg })
       : <p style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, fontStyle: 'italic', margin: 0 }}>{emptyMsg}</p>
   }
   return expanded ? (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 16 }}>
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 100 : 120}px, 1fr))`,
+      gap: isMobile ? 12 : 16,
+    }}>
       {items.map(renderItem)}
     </div>
   ) : (
@@ -2702,6 +2715,7 @@ function DiscoverPage({ userId }) {
 // My List page – poster grid with filter pills
 // ================================================================
 function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack }) {
+  const isMobile = useIsMobile()
   const [filter,    setFilter]    = useState(initialFilter)
   const [userBooks, setUserBooks] = useState([])
   const [loading,   setLoading]   = useState(true)
@@ -2876,8 +2890,8 @@ function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack
         : (
           <div style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
-            gap: 16,
+            gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 100 : 120}px, 1fr))`,
+            gap: isMobile ? 12 : 16,
           }}>
             {visible.map((ub, idx) => (
               <div key={ub.id}
@@ -2918,6 +2932,7 @@ function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack
 // FriendListView – full-page view of a single friend's library
 // ================================================================
 function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack }) {
+  const isMobile = useIsMobile()
   const friendId = friendProfile.id
   const [books,       setBooks]       = useState([])
   const [loading,     setLoading]     = useState(true)
@@ -3127,8 +3142,8 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
           : (
             <div style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
-              gap: 16,
+              gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 100 : 120}px, 1fr))`,
+              gap: isMobile ? 12 : 16,
             }}>
               {read.map(renderTile)}
             </div>
@@ -3240,6 +3255,7 @@ const FRIEND_STATUS_FILTERS = [
 ]
 
 function FriendsPage({ userId }) {
+  const isMobile = useIsMobile()
   const [searchQ,      setSearchQ]      = useState('')
   const [searchRes,    setSearchRes]    = useState([])
   const [searching,    setSearching]    = useState(false)
@@ -3549,8 +3565,8 @@ function FriendsPage({ userId }) {
         : (
           <div style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
-            gap: 16,
+            gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 100 : 120}px, 1fr))`,
+            gap: isMobile ? 12 : 16,
           }}>
             {shelfVisible.map(ub => (
               <div key={ub.id}>
@@ -3674,6 +3690,7 @@ function SettingsRow({ label, children }) {
   )
 }
 function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme, toggleTheme, onOpenList, onGoFriends }) {
+  const isMobile = useIsMobile()
   const booksRef = useRef(null)
   const [displayName, setDisplayName] = useState(profile?.display_name || '')
   const [username,    setUsername]    = useState(profile?.username || '')
@@ -3952,7 +3969,9 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
         ? <EmptyState icon="📚" message="No books match this filter" />
         : (
           <div style={{
-            display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 16, marginBottom: 36,
+            display: 'grid',
+            gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 100 : 120}px, 1fr))`,
+            gap: isMobile ? 12 : 16, marginBottom: 36,
           }}>
             {visibleBooks.map(ub => (
               <PosterCard key={ub.id} userBook={ub} onClick={() => setModal(ub)} />
@@ -4793,25 +4812,59 @@ function Nav({ view, setView, userId, onAddClick, onActivityClick, onMessagesCli
         </div>
       </div>
 
-      {/* Tab row */}
-      <div style={{
-        maxWidth: 960, margin: '0 auto', padding: isMobile ? '0 8px 10px' : '0 16px 12px',
-        display: 'flex', gap: 4,
-      }}>
+      {/* Tab row — desktop only; mobile uses the fixed bottom bar instead */}
+      {!isMobile && (
+        <div style={{
+          maxWidth: 960, margin: '0 auto', padding: '0 16px 12px',
+          display: 'flex', gap: 4,
+        }}>
+          {NAV_TABS.map(([key, icon, lbl]) => (
+            <button key={key} onClick={() => setView(key)} style={{
+              flex: 'initial',
+              padding: '8px 16px',
+              border: 'none', cursor: 'pointer', borderRadius: 20,
+              background: view === key ? `${C.primary}26` : 'transparent',
+              fontFamily: f.sans, fontSize: 13, fontWeight: 600,
+              color: view === key ? C.primary : C.muted,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              transition: 'background 0.15s, color 0.15s',
+              WebkitTapHighlightColor: 'transparent',
+            }}>
+              <span style={{ fontSize: 14 }}>{icon}</span>
+              {lbl}
+            </button>
+          ))}
+        </div>
+      )}
+    </nav>
+  )
+}
+
+// Fixed bottom tab bar — mobile only, WatchList-style icon-over-label
+function BottomTabBar({ view, setView }) {
+  return (
+    <nav style={{
+      position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100,
+      background: C.nav, borderTop: `1px solid ${C.border}`,
+      paddingBottom: 'env(safe-area-inset-bottom)',
+    }}>
+      <div style={{ display: 'flex' }}>
         {NAV_TABS.map(([key, icon, lbl]) => (
           <button key={key} onClick={() => setView(key)} style={{
-            flex: isMobile ? 1 : 'initial',
-            padding: isMobile ? '8px 4px' : '8px 16px',
-            border: 'none', cursor: 'pointer', borderRadius: 20,
-            background: view === key ? `${C.primary}26` : 'transparent',
-            fontFamily: f.sans, fontSize: 13, fontWeight: 600,
+            flex: 1, background: 'none', border: 'none', cursor: 'pointer',
+            padding: '8px 4px 6px', display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center', gap: 3,
+            fontFamily: f.sans, fontSize: 10, fontWeight: 600,
             color: view === key ? C.primary : C.muted,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-            transition: 'background 0.15s, color 0.15s',
             WebkitTapHighlightColor: 'transparent',
           }}>
-            <span style={{ fontSize: isMobile ? 17 : 14 }}>{icon}</span>
-            {!isMobile && lbl}
+            <span style={{
+              fontSize: 18, width: 34, height: 26, borderRadius: 10,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: view === key ? `${C.primary}26` : 'transparent',
+              transition: 'background 0.15s',
+            }}>{icon}</span>
+            {lbl}
           </button>
         ))}
       </div>
@@ -4924,7 +4977,7 @@ export default function App() {
         onAddClick={() => setGlobalAdd(true)}
         onActivityClick={() => setShowActivity(true)}
         onMessagesClick={() => setShowMessages(true)} />
-      <main style={{ maxWidth: 960, margin: '0 auto', padding: isMobile ? '20px 12px 60px' : '32px 20px 80px' }}>
+      <main style={{ maxWidth: 960, margin: '0 auto', padding: isMobile ? '20px 12px 84px' : '32px 20px 80px' }}>
         {drillIn ? (
           <MyListPage userId={userId} initialFilter={drillIn.filter}
             lockedFilter={drillIn.locked ? drillIn.filter : null}
@@ -4946,6 +4999,10 @@ export default function App() {
           </>
         )}
       </main>
+
+      {isMobile && (
+        <BottomTabBar view={view} setView={(v) => { setDrillIn(null); setView(v) }} />
+      )}
 
       {globalAdd && (
         <AddBookModal
