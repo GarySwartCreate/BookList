@@ -377,33 +377,63 @@ function useIsMobile() {
   return isMobile
 }
 
-// Drag-handle reorder — works with mouse AND touch via the unified Pointer
-// Events API (native HTML5 drag-and-drop only fires for mouse, which is why
-// the old draggable/onDragStart approach never worked on phones).
-//
-// A dedicated small grip handle (not the whole tile) owns the pointer
-// events, with touch-action:none set on it from render time. This matters:
-// touch-action is decided by the browser at the START of a touch gesture and
-// can't be changed mid-gesture, so toggling it dynamically on the whole tile
-// (to distinguish "scroll" from "drag") doesn't reliably stop the browser's
-// native swipe-scroll once your finger starts moving. Isolating touch-action:
-// none to a small dedicated handle sidesteps that entirely — grabbing the
-// handle always means "drag", and everywhere else on the tile keeps its
-// normal scroll/tap behavior untouched.
+// Drag-to-reorder — two independent mechanisms sharing one visual state:
+//   1. Native HTML5 drag-and-drop on the whole tile — mouse/desktop, exactly
+//      like the original working version. Touch devices never fire these
+//      events at all, so this path is completely inert on phones.
+//   2. A small grip handle using Pointer Events — touch/mobile. Isolating
+//      touch-action:none to just the handle (rather than the whole tile)
+//      matters because touch-action is decided by the browser at the START
+//      of a touch gesture and can't change mid-gesture, so a scrollable tile
+//      would otherwise win the gesture the instant a finger moves.
+// Commit logic reads from refs (not state) so it's never working off a stale
+// closure regardless of which path fired last.
 function useDragReorder(items, onReorder) {
-  const [dragIdx, setDragIdx] = useState(null)
-  const [overIdx, setOverIdx] = useState(null)
+  const [dragIdx, setDragIdxState] = useState(null)
+  const [overIdx, setOverIdxState] = useState(null)
+  const dragIdxRef = useRef(null)
+  const overIdxRef = useRef(null)
   const activePointerId = useRef(null)
 
-  function onHandlePointerDown(e, idx) {
-    e.preventDefault()
-    e.stopPropagation()
-    activePointerId.current = e.pointerId
-    setDragIdx(idx)
-    setOverIdx(idx)
-    try { e.currentTarget.setPointerCapture(e.pointerId) } catch {}
+  function setDragIdx(v) { dragIdxRef.current = v; setDragIdxState(v) }
+  function setOverIdx(v) { overIdxRef.current = v; setOverIdxState(v) }
+
+  function reorderTo(fromIdx, toIdx) {
+    if (fromIdx == null || toIdx == null || fromIdx === toIdx) return
+    const arr = items.slice()
+    const [moved] = arr.splice(fromIdx, 1)
+    arr.splice(toIdx, 0, moved)
+    onReorder(arr)
   }
 
+  // ---- Desktop: native HTML5 drag-and-drop on the whole tile ----
+  function onDragStart(e, idx) { setDragIdx(idx); e.dataTransfer.effectAllowed = 'move' }
+  function onDragOver(e, idx)  { e.preventDefault(); if (idx !== overIdxRef.current) setOverIdx(idx) }
+  function onDrop(e, idx) {
+    e.preventDefault()
+    reorderTo(dragIdxRef.current, idx)
+    setDragIdx(null); setOverIdx(null)
+  }
+  function onDragEnd() { setDragIdx(null); setOverIdx(null) }
+
+  function nativeDragProps(idx) {
+    return {
+      draggable: true,
+      onDragStart: (e) => onDragStart(e, idx),
+      onDragOver: (e) => onDragOver(e, idx),
+      onDrop: (e) => onDrop(e, idx),
+      onDragEnd,
+    }
+  }
+
+  // ---- Mobile: press the grip handle and drag with a finger ----
+  function onHandlePointerDown(e, idx) {
+    if (e.pointerType === 'mouse') return // desktop already has native DnD on the tile
+    e.preventDefault()
+    activePointerId.current = e.pointerId
+    setDragIdx(idx); setOverIdx(idx)
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch {}
+  }
   function onHandlePointerMove(e) {
     if (activePointerId.current !== e.pointerId) return
     e.preventDefault()
@@ -411,30 +441,22 @@ function useDragReorder(items, onReorder) {
     const target = el?.closest?.('[data-drag-idx]')
     if (target) {
       const ti = parseInt(target.getAttribute('data-drag-idx'), 10)
-      if (!Number.isNaN(ti)) setOverIdx(prev => (prev === ti ? prev : ti))
+      if (!Number.isNaN(ti)) setOverIdx(ti)
     }
   }
-
-  function finish(e) {
+  function finishHandle(e) {
     if (activePointerId.current !== e.pointerId) return
     activePointerId.current = null
-    if (dragIdx !== null && overIdx !== null && dragIdx !== overIdx) {
-      const arr = items.slice()
-      const [moved] = arr.splice(dragIdx, 1)
-      arr.splice(overIdx, 0, moved)
-      onReorder(arr)
-    }
+    reorderTo(dragIdxRef.current, overIdxRef.current)
     setDragIdx(null); setOverIdx(null)
   }
 
-  // Spread onto the small grip handle rendered on top of each tile.
   function handleBind(idx) {
     return {
-      'data-drag-idx': idx,
       onPointerDown: (e) => onHandlePointerDown(e, idx),
       onPointerMove: onHandlePointerMove,
-      onPointerUp: finish,
-      onPointerCancel: finish,
+      onPointerUp: finishHandle,
+      onPointerCancel: finishHandle,
       style: { touchAction: 'none' },
     }
   }
@@ -444,7 +466,7 @@ function useDragReorder(items, onReorder) {
     return { 'data-drag-idx': idx }
   }
 
-  return { dragIdx, overIdx, handleBind, tileProps }
+  return { dragIdx, overIdx, nativeDragProps, handleBind, tileProps }
 }
 
 function timeAgo(dateStr) {
@@ -2109,7 +2131,7 @@ function HomePage({ userId, onOpenList }) {
       reordered.map((ub, idx) => supabase.from('user_books').update({ position: idx }).eq('id', ub.id))
     )
   }
-  const { dragIdx, overIdx, handleBind, tileProps } = useDragReorder(wantToRead, persistOrder)
+  const { dragIdx, overIdx, nativeDragProps, handleBind, tileProps } = useDragReorder(wantToRead, persistOrder)
 
   return (
     <div>
@@ -2136,11 +2158,12 @@ function HomePage({ userId, onOpenList }) {
         renderItem={(ub, idx) => (
           <div key={ub.id}
             {...tileProps(idx)}
+            {...nativeDragProps(idx)}
             style={{
               position: 'relative',
               opacity: dragIdx === idx ? 0.4 : 1,
               outline: overIdx === idx && dragIdx !== idx ? `2px solid ${C.primary}` : 'none',
-              borderRadius: 10,
+              borderRadius: 10, cursor: 'grab',
             }}
           >
             <PosterCard userBook={ub}
@@ -2852,8 +2875,8 @@ function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack
     ? [...genreFiltered].sort((a, b) => (b.rating || 0) - (a.rating || 0))
     : sortDefault(genreFiltered)
 
-  // Drag for want_to_read queue — press-and-hold works with mouse AND touch
-  const { dragIdx, overIdx, handleBind, tileProps } = useDragReorder(visible, handleReorder)
+  // Drag for want_to_read queue — native drag on desktop, grip handle on touch
+  const { dragIdx, overIdx, nativeDragProps, handleBind, tileProps } = useDragReorder(visible, handleReorder)
 
   return (
     <div>
@@ -2949,11 +2972,13 @@ function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack
             {visible.map((ub, idx) => (
               <div key={ub.id}
                 {...(isQueue ? tileProps(idx) : {})}
+                {...(isQueue ? nativeDragProps(idx) : {})}
                 style={{
                   position: 'relative',
                   opacity: isQueue && dragIdx === idx ? 0.4 : 1,
                   outline: isQueue && overIdx === idx && dragIdx !== idx ? `2px solid ${C.primary}` : 'none',
                   borderRadius: 10, transition: 'opacity 0.15s',
+                  cursor: isQueue ? 'grab' : undefined,
                 }}
               >
                 <PosterCard
