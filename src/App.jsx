@@ -1179,6 +1179,12 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
     </div>
   )
 
+  function flashError(err) {
+    console.error(err)
+    setMsg({ type: 'error', text: err?.message || 'Something went wrong — please try again.' })
+    setTimeout(() => setMsg(null), 4000)
+  }
+
   // Creates the user_books row on demand (e.g. rating/noting a book you haven't shelved yet)
   async function ensureEntry(defaultStatus = 'want_to_read') {
     if (userBookId) return userBookId
@@ -1190,35 +1196,54 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
   }
 
   async function handleStatusChange(newStatus) {
+    const prevStatus = status
     setStatus(newStatus)
-    if (userBookId) {
-      await supabase.from('user_books').update({ status: newStatus }).eq('id', userBookId)
-    } else {
-      const row = await addToLibrary(userId, book, newStatus)
-      setUserBookId(row.id)
-    }
-    onUpdate?.()
-    if (newStatus === 'read') {
-      setShowRating(true)
-    } else {
-      flashSaved()
+    try {
+      if (userBookId) {
+        const { error } = await supabase.from('user_books').update({ status: newStatus }).eq('id', userBookId)
+        if (error) throw error
+      } else {
+        const row = await addToLibrary(userId, book, newStatus)
+        setUserBookId(row.id)
+      }
+      onUpdate?.()
+      if (newStatus === 'read') {
+        setShowRating(true)
+      } else {
+        flashSaved()
+      }
+    } catch (err) {
+      setStatus(prevStatus)
+      flashError(err)
     }
   }
 
   async function handleRatingChange(stars) {
+    const prevRating = rating
     setRating(stars)
-    const id = await ensureEntry()
-    await supabase.from('user_books').update({ rating: stars }).eq('id', id)
-    onUpdate?.()
-    flashSaved()
+    try {
+      const id = await ensureEntry()
+      const { error } = await supabase.from('user_books').update({ rating: stars }).eq('id', id)
+      if (error) throw error
+      onUpdate?.()
+      flashSaved()
+    } catch (err) {
+      setRating(prevRating)
+      flashError(err)
+    }
   }
 
   async function handleNotesSave() {
     if (!userBookId && !notes.trim()) return // nothing to save for an unshelved book
-    const id = await ensureEntry()
-    await supabase.from('user_books').update({ notes }).eq('id', id)
-    onUpdate?.()
-    flashSaved()
+    try {
+      const id = await ensureEntry()
+      const { error } = await supabase.from('user_books').update({ notes }).eq('id', id)
+      if (error) throw error
+      onUpdate?.()
+      flashSaved()
+    } catch (err) {
+      flashError(err)
+    }
   }
 
   async function handleToggleTop10() {
