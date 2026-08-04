@@ -377,6 +377,81 @@ function useIsMobile() {
   return isMobile
 }
 
+// Press-and-hold-to-drag reorder — works with mouse AND touch via the unified
+// Pointer Events API (native HTML5 drag-and-drop only fires for mouse, which
+// is why the old draggable/onDragStart approach never worked on phones).
+// A short hold (with minimal movement) arms drag mode; a quick tap/swipe
+// before that timer fires is left alone so scrolling and tapping to open a
+// book keep working exactly as before.
+function useDragReorder(items, onReorder) {
+  const [dragIdx, setDragIdx] = useState(null)
+  const [overIdx, setOverIdx] = useState(null)
+  const pointers = useRef({})
+  const suppressClick = useRef(false)
+
+  function onPointerDown(e, idx) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    const pointerId = e.pointerId
+    const st = { armed: false, cancelled: false, startX: e.clientX, startY: e.clientY, idx }
+    pointers.current[pointerId] = st
+    st.timer = setTimeout(() => {
+      if (st.cancelled) return
+      st.armed = true
+      setDragIdx(idx)
+      setOverIdx(idx)
+    }, 300)
+  }
+
+  function onPointerMove(e) {
+    const st = pointers.current[e.pointerId]
+    if (!st) return
+    if (!st.armed) {
+      const dx = e.clientX - st.startX, dy = e.clientY - st.startY
+      if (Math.hypot(dx, dy) > 8) { st.cancelled = true; clearTimeout(st.timer) }
+      return
+    }
+    e.preventDefault()
+    const el = document.elementFromPoint(e.clientX, e.clientY)
+    const target = el?.closest?.('[data-drag-idx]')
+    if (target) {
+      const ti = parseInt(target.getAttribute('data-drag-idx'), 10)
+      if (!Number.isNaN(ti)) setOverIdx(prev => (prev === ti ? prev : ti))
+    }
+  }
+
+  function finish(pointerId) {
+    const st = pointers.current[pointerId]
+    if (!st) return
+    clearTimeout(st.timer)
+    if (st.armed) {
+      suppressClick.current = true
+      setTimeout(() => { suppressClick.current = false }, 0)
+      if (dragIdx !== null && overIdx !== null && dragIdx !== overIdx) {
+        const arr = items.slice()
+        const [moved] = arr.splice(dragIdx, 1)
+        arr.splice(overIdx, 0, moved)
+        onReorder(arr)
+      }
+    }
+    setDragIdx(null); setOverIdx(null)
+    delete pointers.current[pointerId]
+  }
+
+  function onPointerUp(e)     { finish(e.pointerId) }
+  function onPointerCancel(e) { finish(e.pointerId) }
+  function onClickCapture(e)  { if (suppressClick.current) { e.preventDefault(); e.stopPropagation() } }
+
+  function bind(idx) {
+    return {
+      'data-drag-idx': idx,
+      onPointerDown: (e) => onPointerDown(e, idx),
+      onPointerMove, onPointerUp, onPointerCancel, onClickCapture,
+    }
+  }
+
+  return { dragIdx, overIdx, bind }
+}
+
 function timeAgo(dateStr) {
   const diff = (Date.now() - new Date(dateStr)) / 1000
   if (diff < 60)   return 'just now'
@@ -1994,8 +2069,6 @@ function HomePage({ userId, onOpenList }) {
   const [loadingData,  setLoadingData]  = useState(true)
   const [modal,        setModal]        = useState(null)
   const [showAdd,      setShowAdd]      = useState(null) // null | 'reading' | 'want_to_read'
-  const [dragIdx,      setDragIdx]      = useState(null)
-  const [overIdx,      setOverIdx]      = useState(null)
   const [showReadFilter, setShowReadFilter] = useState(false)
   const [readSort,     setReadSort]     = useState('default')
   const [readGenre,    setReadGenre]    = useState('all')
@@ -2029,7 +2102,9 @@ function HomePage({ userId, onOpenList }) {
 
   const goToList = (filter, locked = false) => () => onOpenList(filter, locked)
 
-  // Drag-to-reorder — Want to Read row, left-to-right priority
+  // Drag-to-reorder — Want to Read row, left-to-right priority.
+  // Press-and-hold (mouse OR touch) via useDragReorder, since native HTML5
+  // drag-and-drop never fires on touch devices.
   async function persistOrder(reordered) {
     setMyBooks(prev => {
       const others = prev.filter(u => u.status !== 'want_to_read')
@@ -2039,17 +2114,7 @@ function HomePage({ userId, onOpenList }) {
       reordered.map((ub, idx) => supabase.from('user_books').update({ position: idx }).eq('id', ub.id))
     )
   }
-  function onDragStart(e, idx) { setDragIdx(idx); e.dataTransfer.effectAllowed = 'move' }
-  function onDragOver(e, idx)  { e.preventDefault(); if (idx !== overIdx) setOverIdx(idx) }
-  function onDrop(e, idx) {
-    e.preventDefault()
-    if (dragIdx === null || dragIdx === idx) return
-    const arr = wantToRead.slice()
-    const [moved] = arr.splice(dragIdx, 1)
-    arr.splice(idx, 0, moved)
-    setDragIdx(null); setOverIdx(null)
-    persistOrder(arr)
-  }
+  const { dragIdx, overIdx, bind } = useDragReorder(wantToRead, persistOrder)
 
   return (
     <div>
@@ -2075,15 +2140,11 @@ function HomePage({ userId, onOpenList }) {
         items={wantToRead}
         renderItem={(ub, idx) => (
           <div key={ub.id}
-            draggable
-            onDragStart={e => onDragStart(e, idx)}
-            onDragOver={e => onDragOver(e, idx)}
-            onDrop={e => onDrop(e, idx)}
-            onDragEnd={() => { setDragIdx(null); setOverIdx(null) }}
+            {...bind(idx)}
             style={{
               opacity: dragIdx === idx ? 0.4 : 1,
               outline: overIdx === idx && dragIdx !== idx ? `2px solid ${C.primary}` : 'none',
-              borderRadius: 10, cursor: 'grab',
+              borderRadius: 10, cursor: 'grab', touchAction: 'pan-x',
             }}
           >
             <PosterCard userBook={ub}
@@ -2097,7 +2158,7 @@ function HomePage({ userId, onOpenList }) {
       />
       {wantToRead.length > 1 && (
         <p style={{ margin: '-30px 0 20px', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
-          ⠿ Drag covers to set your priority order
+          ⠿ Press and hold a cover to drag it and set your priority order
         </p>
       )}
 
@@ -2721,8 +2782,6 @@ function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack
   const [userBooks, setUserBooks] = useState([])
   const [loading,   setLoading]   = useState(true)
   const [modal,     setModal]     = useState(null)
-  const [dragIdx,   setDragIdx]   = useState(null)
-  const [overIdx,   setOverIdx]   = useState(null)
   const [showFilter, setShowFilter] = useState(false)
   const [readSort,  setReadSort]  = useState('default')
   const [readGenre, setReadGenre] = useState('all')
@@ -2790,18 +2849,8 @@ function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack
     ? [...genreFiltered].sort((a, b) => (b.rating || 0) - (a.rating || 0))
     : sortDefault(genreFiltered)
 
-  // Drag for want_to_read queue
-  function onDragStart(e, idx) { setDragIdx(idx); e.dataTransfer.effectAllowed = 'move' }
-  function onDragOver(e, idx)  { e.preventDefault(); if (idx !== overIdx) setOverIdx(idx) }
-  function onDrop(e, idx) {
-    e.preventDefault()
-    if (dragIdx === null || dragIdx === idx) return
-    const wtr = visible.slice()
-    const [moved] = wtr.splice(dragIdx, 1)
-    wtr.splice(idx, 0, moved)
-    setDragIdx(null); setOverIdx(null)
-    handleReorder(wtr)
-  }
+  // Drag for want_to_read queue — press-and-hold works with mouse AND touch
+  const { dragIdx, overIdx, bind } = useDragReorder(visible, handleReorder)
 
   return (
     <div>
@@ -2882,7 +2931,7 @@ function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack
 
       {isQueue && visible.length > 1 && (
         <p style={{ margin: '0 0 16px', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
-          ⠿ Drag covers to reorder your queue
+          ⠿ Press and hold a cover to drag and reorder your queue
         </p>
       )}
 
@@ -2896,15 +2945,12 @@ function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack
           }}>
             {visible.map((ub, idx) => (
               <div key={ub.id}
-                draggable={isQueue}
-                onDragStart={isQueue ? e => onDragStart(e, idx) : undefined}
-                onDragOver={isQueue ? e => onDragOver(e, idx) : undefined}
-                onDrop={isQueue ? e => onDrop(e, idx) : undefined}
-                onDragEnd={() => { setDragIdx(null); setOverIdx(null) }}
+                {...(isQueue ? bind(idx) : {})}
                 style={{
                   opacity: isQueue && dragIdx === idx ? 0.4 : 1,
                   outline: isQueue && overIdx === idx && dragIdx !== idx ? `2px solid ${C.primary}` : 'none',
                   borderRadius: 10, transition: 'opacity 0.15s',
+                  touchAction: isQueue ? 'pan-y' : undefined,
                 }}
               >
                 <PosterCard
