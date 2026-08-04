@@ -993,6 +993,135 @@ function RatingPopup({ title, onRate, onSkip }) {
   )
 }
 
+// One combined "you finished it!" panel — rate, note, fave, and share with
+// friends all in a single step instead of asking for rating then stopping.
+function FinishedReadingPopup({ title, initialRating, initialNotes, initialFave, shareFriends, sentTo, onSave, onSkip }) {
+  const [hovered,  setHovered]  = useState(0)
+  const [selected, setSelected] = useState(initialRating || 0)
+  const [notes,    setNotes]    = useState(initialNotes || '')
+  const [fave,     setFave]     = useState(!!initialFave)
+  const [shareIds, setShareIds] = useState(new Set())
+  const [saving,   setSaving]   = useState(false)
+
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape') onSkip() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onSkip])
+
+  function toggleShare(id) {
+    setShareIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  async function handleSave() {
+    setSaving(true)
+    await onSave({ rating: selected || null, notes: notes.trim(), fave, shareIds: [...shareIds] })
+    setSaving(false)
+  }
+
+  return (
+    <div onClick={(e) => e.target === e.currentTarget && onSkip()}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1100,
+        background: 'rgba(5,4,15,0.88)', backdropFilter: 'blur(6px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        overflowY: 'auto',
+      }}>
+      <div style={{
+        background: C.surface, borderRadius: 14, padding: 28, maxWidth: 400, width: '100%',
+        border: `1px solid ${C.border}`, boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
+        textAlign: 'center', maxHeight: '90vh', overflowY: 'auto',
+      }}>
+        <div style={{ fontSize: 36, marginBottom: 10 }}>✅</div>
+        <h3 style={{ margin: '0 0 4px', color: C.text, fontFamily: f.serif, fontSize: 19 }}>Finished it!</h3>
+        <p style={{ margin: '0 0 20px', color: C.muted, fontFamily: f.sans, fontSize: 13 }}>
+          <em style={{ color: C.text }}>{title}</em>
+        </p>
+
+        <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+          textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700, textAlign: 'left' }}>Rating</p>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 6, marginBottom: 18 }}>
+          {[1, 2, 3, 4, 5].map(n => (
+            <span key={n}
+              onMouseEnter={() => setHovered(n)}
+              onMouseLeave={() => setHovered(0)}
+              onClick={() => setSelected(n === selected ? 0 : n)}
+              style={{
+                fontSize: 32, cursor: 'pointer', userSelect: 'none',
+                color: n <= (hovered || selected) ? C.star : C.border,
+                transition: 'color 0.1s, transform 0.1s',
+                transform: n <= (hovered || selected) ? 'scale(1.12)' : 'scale(1)',
+                display: 'inline-block',
+              }}>★</span>
+          ))}
+        </div>
+
+        <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+          textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700, textAlign: 'left' }}>Notes (optional)</p>
+        <textarea
+          value={notes}
+          onChange={e => setNotes(e.target.value)}
+          placeholder="What did you think?"
+          rows={3}
+          style={{ ...inputStyle, marginBottom: 18, resize: 'vertical', fontFamily: f.sans, fontSize: 13 }}
+        />
+
+        <button onClick={() => setFave(o => !o)} style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+          width: '100%', padding: '10px 14px', borderRadius: 10, cursor: 'pointer', marginBottom: 18,
+          background: fave ? `${C.primary}22` : C.surface2,
+          border: `1px solid ${fave ? C.primary : C.border}`,
+          color: fave ? C.primary : C.text, fontFamily: f.sans, fontSize: 13, fontWeight: 700,
+        }}>
+          {fave ? '🏆 In your Top 10' : '⭐ Add to Top 10'}
+        </button>
+
+        <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+          textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700, textAlign: 'left' }}>Share with friends</p>
+        <div style={{ marginBottom: 20 }}>
+          {shareFriends === null ? (
+            <p style={{ fontSize: 12, color: C.muted, fontFamily: f.sans, fontStyle: 'italic', margin: 0 }}>Loading friends…</p>
+          ) : shareFriends.length === 0 ? (
+            <p style={{ fontSize: 12, color: C.muted, fontFamily: f.sans, fontStyle: 'italic', margin: 0 }}>No friends yet</p>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+              {shareFriends.map(fr => {
+                const already = sentTo?.has(fr.id)
+                const on = shareIds.has(fr.id) || already
+                return (
+                  <button key={fr.id} disabled={already}
+                    onClick={() => toggleShare(fr.id)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 20,
+                      cursor: already ? 'default' : 'pointer',
+                      background: on ? C.primary : C.surface2,
+                      border: `1px solid ${on ? C.primary : C.border}`,
+                      color: on ? C.white : C.text, fontFamily: f.sans, fontSize: 12, fontWeight: 600,
+                      opacity: already ? 0.6 : 1,
+                    }}>
+                    {on ? '✓ ' : ''}{fr.display_name || fr.username}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+          <button onClick={handleSave} disabled={saving} style={{ ...btn('accent'), minWidth: 140 }}>
+            {saving ? 'Saving…' : 'Save & Finish'}
+          </button>
+          <button onClick={onSkip} disabled={saving} style={btn('subtle', 'sm')}>Skip</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ================================================================
 // BookDetailModal – full info overlay
 // ================================================================
@@ -1121,9 +1250,10 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
       })
   }, [book?.id, userId])
 
-  // Lazy-load friends list the first time the Share panel opens
+  // Lazy-load friends list the first time the Share panel — or the
+  // finished-reading popup, which also offers sharing — opens
   useEffect(() => {
-    if (!showSharePanel || shareFriends !== null) return
+    if (!(showSharePanel || showRating) || shareFriends !== null) return
     supabase.from('friendships')
       .select('requester_id, addressee_id')
       .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`)
@@ -1134,7 +1264,7 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
         const { data: profiles } = await supabase.from('profiles').select('*').in('id', friendIds)
         setShareFriends(profiles || [])
       })
-  }, [showSharePanel, shareFriends, userId])
+  }, [showSharePanel, showRating, shareFriends, userId])
 
   async function sendToFriend(friendId) {
     await supabase.from('book_recommendations').insert({
@@ -1291,13 +1421,55 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
     setTimeout(() => setMsg(null), 2000)
   }
 
-  async function handleRated(stars) {
-    const id = await ensureEntry('read')
-    await supabase.from('user_books').update({ rating: stars }).eq('id', id)
-    setRating(stars)
-    setShowRating(false)
-    onUpdate?.()
-    onClose()
+  // Saves rating + notes + fave + friend-shares in one shot, from the
+  // combined "Finished it!" popup — instead of asking for just a rating
+  // and stopping there.
+  async function handleFinishReading({ rating: stars, notes: notesText, fave: faveOn, shareIds }) {
+    try {
+      const id = await ensureEntry('read')
+
+      const updates = {}
+      if (stars) updates.rating = stars
+      if (notesText) updates.notes = notesText
+      if (Object.keys(updates).length > 0) {
+        const { error } = await supabase.from('user_books').update(updates).eq('id', id)
+        if (error) throw error
+        if (stars) setRating(stars)
+        if (notesText) setNotes(notesText)
+      }
+
+      let top10Blocked = false
+      if (faveOn && !top10) {
+        const { data: currentTop10 } = await supabase.from('user_books')
+          .select('id').eq('user_id', userId).eq('top_10', true)
+        if ((currentTop10 || []).length >= 10) {
+          top10Blocked = true
+        } else {
+          const { error } = await supabase.from('user_books').update({ top_10: true }).eq('id', id)
+          if (error) throw error
+          setTop10(true)
+        }
+      } else if (!faveOn && top10) {
+        const { error } = await supabase.from('user_books').update({ top_10: false }).eq('id', id)
+        if (error) throw error
+        setTop10(false)
+      }
+
+      if (shareIds?.length) {
+        await Promise.all(shareIds.filter(fid => !sentTo.has(fid)).map(fid => sendToFriend(fid)))
+      }
+
+      setShowRating(false)
+      onUpdate?.()
+      if (top10Blocked) {
+        setMsg({ type: 'error', text: "Saved — but your Top 10 is already full, so this wasn't added to it." })
+        setTimeout(() => setMsg(null), 4000)
+      } else {
+        onClose()
+      }
+    } catch (err) {
+      flashError(err)
+    }
   }
 
   async function toggleFollow() {
@@ -1326,9 +1498,14 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
   return (
     <>
     {showRating && (
-      <RatingPopup
+      <FinishedReadingPopup
         title={book?.title}
-        onRate={handleRated}
+        initialRating={rating}
+        initialNotes={notes}
+        initialFave={top10}
+        shareFriends={shareFriends}
+        sentTo={sentTo}
+        onSave={handleFinishReading}
         onSkip={() => { setShowRating(false); onUpdate?.(); onClose() }}
       />
     )}
