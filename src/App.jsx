@@ -579,7 +579,6 @@ function PosterCard({ book, userBook, onClick, width, height, quickActions }) {
   const cover = book?.cover_url || userBook?.books?.cover_url || null
   const title = book?.title || userBook?.books?.title || ''
   const authors = book?.authors || userBook?.books?.authors || []
-  const rating = userBook?.rating
   const status = userBook?.status
 
   // iOS Safari: track touch position to distinguish tap vs scroll
@@ -618,16 +617,6 @@ function PosterCard({ book, userBook, onClick, width, height, quickActions }) {
             style={{ width, height, objectFit: 'cover', borderRadius: 8, display: 'block' }} />
         : <NoCover title={title} width={width} height={height} />
       }
-
-      {/* Rating badge */}
-      {rating && (
-        <div style={{
-          position: 'absolute', top: 6, right: 6,
-          background: 'rgba(0,0,0,0.8)', borderRadius: 5,
-          padding: '2px 6px', fontSize: 11, fontFamily: f.sans,
-          fontWeight: 700, color: C.accent, display: 'flex', alignItems: 'center', gap: 2,
-        }}>★ {rating}</div>
-      )}
 
       {/* Status corner dot */}
       {status && (
