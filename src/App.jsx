@@ -699,6 +699,8 @@ function SearchResultCard({ book, userId, myBookIds, onAdded, onOpenModal }) {
   const [adding,  setAdding]  = useState(null)
   const [added,   setAdded]   = useState(null)
   const [showRatingPopup, setShowRatingPopup] = useState(false)
+  const hideTimerRef = useRef(null)
+  useEffect(() => () => clearTimeout(hideTimerRef.current), [])
   const isInLibrary = myBookIds?.has(book.id) || !!added
 
   async function handleAdd(status) {
@@ -721,10 +723,15 @@ function SearchResultCard({ book, userId, myBookIds, onAdded, onOpenModal }) {
     setShowRatingPopup(false)
   }
 
-  // Mobile has no hover — first tap reveals the action icons instead of opening
-  // the modal; a second tap (on the now-visible overlay background) opens it.
+  // Mobile has no hover — tap reveals the action icons for a couple seconds,
+  // then they auto-hide (matches WatchList). Tapping again while revealed opens the modal.
   function handleTileTap() {
-    if (isMobile && !isInLibrary && !hovered) { setHovered(true); return }
+    if (isMobile && !isInLibrary && !hovered) {
+      setHovered(true)
+      clearTimeout(hideTimerRef.current)
+      hideTimerRef.current = setTimeout(() => setHovered(false), 2500)
+      return
+    }
     onOpenModal?.()
   }
 
@@ -2107,6 +2114,8 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal, ca
   const [adding,   setAdding]   = useState(null)
   const [added,    setAdded]    = useState(null)
   const [showRating, setShowRating] = useState(false)
+  const hideTimerRef = useRef(null)
+  useEffect(() => () => clearTimeout(hideTimerRef.current), [])
   const inLibrary = myBookIds?.has(book.id) || !!added
 
   async function handleAdd(status) {
@@ -2136,11 +2145,16 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal, ca
     onAdded?.(book.id)  // reload after rating is saved
   }
 
-  // Mobile has no hover — first tap reveals the action icons instead of opening
-  // the modal; a second tap (on the now-visible overlay background) opens it.
-  // Desktop already reveals on hover, so a click there always opens directly.
+  // Mobile has no hover — tap reveals the action icons for a couple seconds,
+  // then they auto-hide (matches WatchList), instead of staying pinned on the
+  // tile. Tapping again while revealed opens the modal directly.
   function handleTileTap() {
-    if (isMobile && !inLibrary && !hovered) { setHovered(true); return }
+    if (isMobile && !inLibrary && !hovered) {
+      setHovered(true)
+      clearTimeout(hideTimerRef.current)
+      hideTimerRef.current = setTimeout(() => setHovered(false), 2500)
+      return
+    }
     onOpenModal?.()
   }
 
@@ -2220,6 +2234,8 @@ function FriendBookCard({ ub, profile, userId, myBookIds, onAdded, onOpenModal }
   const [hovered, setHovered] = useState(false)
   const [adding,  setAdding]  = useState(null)
   const [added,   setAdded]   = useState(null)
+  const hideTimerRef = useRef(null)
+  useEffect(() => () => clearTimeout(hideTimerRef.current), [])
   const book = ub.books || {}
   const inLibrary = myBookIds?.has(book.id) || !!added
 
@@ -2233,10 +2249,15 @@ function FriendBookCard({ ub, profile, userId, myBookIds, onAdded, onOpenModal }
     setAdding(null)
   }
 
-  // Mobile has no hover — first tap reveals the action icons instead of opening
-  // the modal; a second tap (on the now-visible overlay background) opens it.
+  // Mobile has no hover — tap reveals the action icons for a couple seconds,
+  // then they auto-hide (matches WatchList). Tapping again while revealed opens the modal.
   function handleTileTap() {
-    if (isMobile && !inLibrary && !hovered) { setHovered(true); return }
+    if (isMobile && !inLibrary && !hovered) {
+      setHovered(true)
+      clearTimeout(hideTimerRef.current)
+      hideTimerRef.current = setTimeout(() => setHovered(false), 2500)
+      return
+    }
     onOpenModal?.()
   }
 
@@ -3448,6 +3469,8 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
   const [readGenre,    setReadGenre]    = useState('all')
   const [expandReading,     setExpandReading]     = useState(false)
   const [expandWantToRead,  setExpandWantToRead]  = useState(false)
+  const hideTimerRef = useRef(null)
+  useEffect(() => () => clearTimeout(hideTimerRef.current), [])
 
   useEffect(() => {
     supabase.from('user_books').select('*, books(*)')
@@ -3490,10 +3513,15 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
     const inLibrary = myBookIds.has(ub.book_id)
     const isHovered = hoveredId === ub.id
 
-    // Mobile has no hover — first tap reveals the action icons instead of opening
-    // the modal; a second tap (on the now-visible overlay background) opens it.
+    // Mobile has no hover — tap reveals the action icons for a couple seconds,
+    // then they auto-hide (matches WatchList). Tapping again while revealed opens the modal.
     function handleTap() {
-      if (isMobile && !inLibrary && !isHovered) { setHoveredId(ub.id); return }
+      if (isMobile && !inLibrary && !isHovered) {
+        setHoveredId(ub.id)
+        clearTimeout(hideTimerRef.current)
+        hideTimerRef.current = setTimeout(() => setHoveredId(null), 2500)
+        return
+      }
       setModal(book)
     }
 
@@ -3844,6 +3872,8 @@ function FriendsPage({ userId }) {
   const [recommendTo,  setRecommendTo]  = useState(null) // friendProfile being sent a book
   const [hoveredShelfId, setHoveredShelfId] = useState(null) // aggregated shelf grid — tile being hovered
   const [shelfAdding,    setShelfAdding]    = useState(null) // aggregated shelf grid — `${bookId}${status}` in flight
+  const shelfHideTimerRef = useRef(null)
+  useEffect(() => () => clearTimeout(shelfHideTimerRef.current), [])
 
   async function quickAddToShelf(book, status) {
     setShelfAdding(book.id + status)
@@ -4158,10 +4188,16 @@ function FriendsPage({ userId }) {
               const inLibrary = myBookIds.has(ub.book_id)
               const isHovered = hoveredShelfId === ub.id
 
-              // Mobile has no hover — first tap reveals the action icons instead
-              // of opening the modal; a second tap opens it.
+              // Mobile has no hover — tap reveals the action icons for a couple
+              // seconds, then they auto-hide (matches WatchList). Tapping again
+              // while revealed opens the modal.
               function handleTap() {
-                if (isMobile && !inLibrary && !isHovered) { setHoveredShelfId(ub.id); return }
+                if (isMobile && !inLibrary && !isHovered) {
+                  setHoveredShelfId(ub.id)
+                  clearTimeout(shelfHideTimerRef.current)
+                  shelfHideTimerRef.current = setTimeout(() => setHoveredShelfId(null), 2500)
+                  return
+                }
                 setModal({ book: ub.books, userBook: ub })
               }
 
