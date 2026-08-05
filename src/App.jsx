@@ -104,9 +104,9 @@ async function fetchWithTimeout(url, ms = 6000) {
 }
 
 // ─── Google Books API ─────────────────────────────────────────────
-async function searchGoogleBooks(query, maxResults = 20) {
+async function fetchGoogleVolumes(q, maxResults) {
   const url = new URL('https://www.googleapis.com/books/v1/volumes')
-  url.searchParams.set('q', query)
+  url.searchParams.set('q', q)
   url.searchParams.set('maxResults', String(maxResults))
   url.searchParams.set('printType', 'books')
   if (GOOGLE_BOOKS_KEY) url.searchParams.set('key', GOOGLE_BOOKS_KEY)
@@ -117,6 +117,31 @@ async function searchGoogleBooks(query, maxResults = 20) {
   }
   const data = await res.json()
   return (data.items || []).map(parseVolume)
+}
+
+// Google's plain relevance search ranks across title/description/subject all at
+// once, so a short/generic title ("Country People", "A Pair of Aces") can get
+// buried under unrelated books that just mention those words — the exact match
+// never makes it into the first `maxResults`. Adding author narrows it enough to
+// surface it, which is the workaround users have been forced into. Fix it at the
+// source: for real (multi-result) searches with a plain-text query, also run an
+// intitle:-scoped search in parallel and merge, favoring the title-scoped hits.
+// Skipped for callers that already pass a scoped operator (isbn:/intitle:/etc.)
+// or that only want a single exact-match result, to avoid doubling API quota use.
+async function searchGoogleBooks(query, maxResults = 20) {
+  const isScoped = /\b(intitle|inauthor|inpublisher|subject|isbn):/i.test(query)
+  if (isScoped || maxResults <= 1) return fetchGoogleVolumes(query, maxResults)
+
+  const [broad, titled] = await Promise.all([
+    fetchGoogleVolumes(query, maxResults),
+    fetchGoogleVolumes(`intitle:${query}`, maxResults).catch(() => []),
+  ])
+  const seen = new Set()
+  const merged = []
+  for (const b of [...titled, ...broad]) {
+    if (!seen.has(b.id)) { seen.add(b.id); merged.push(b) }
+  }
+  return merged.slice(0, maxResults)
 }
 
 // ─── Open Library fallback ────────────────────────────────────────
