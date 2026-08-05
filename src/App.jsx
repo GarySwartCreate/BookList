@@ -618,15 +618,6 @@ function PosterCard({ book, userBook, onClick, width, height, quickActions }) {
         : <NoCover title={title} width={width} height={height} />
       }
 
-      {/* Status corner dot */}
-      {status && (
-        <div style={{
-          position: 'absolute', top: 6, left: 6, width: 8, height: 8, borderRadius: '50%',
-          background: STATUS_COLORS[status]?.color || C.muted,
-          boxShadow: '0 0 4px rgba(0,0,0,0.6)',
-        }} />
-      )}
-
       {/* Quick-action icons — pinned on the tile, replaces title text for shelf tiles */}
       {quickActions?.length > 0 ? (
         <div style={{
@@ -1186,7 +1177,7 @@ function FinishedReadingPopup({ title, initialRating, shareFriends, sentTo, link
 // BookDetailModal – full info overlay
 // ================================================================
 // WatchList-style action box: icon + label, optional badge, used in BookDetailModal
-function ActionBox({ icon, label, badge, active, danger, onClick }) {
+function ActionBox({ icon, label, badge, sub, active, danger, onClick }) {
   return (
     <button onClick={onClick} style={{
       flex: 1, minWidth: 60, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
@@ -1205,6 +1196,7 @@ function ActionBox({ icon, label, badge, active, danger, onClick }) {
       )}
       <span style={{ fontSize: 17 }}>{icon}</span>
       <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+      {sub && <span style={{ display: 'flex', alignItems: 'center', gap: 3, lineHeight: 1 }}>{sub}</span>}
     </button>
   )
 }
@@ -1681,6 +1673,26 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
           fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>×</button>
 
+        {/* Status — pinned to top, in line with close button */}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18, paddingRight: 40 }}>
+          {Object.entries(STATUS_LABELS).map(([key, lbl]) => {
+            const active = status === key
+            const sc = STATUS_COLORS[key]
+            return (
+              <button key={key} onClick={() => handleStatusChange(key)}
+                style={{
+                  cursor: 'pointer', fontFamily: f.sans, fontSize: 12, fontWeight: 700,
+                  padding: '6px 12px', borderRadius: 20, transition: 'all 0.15s',
+                  border: `1px solid ${active ? sc.color : C.border}`,
+                  background: active ? sc.color : C.surface2,
+                  color: active ? '#0f1117' : C.muted,
+                }}>
+                {STATUS_ICONS[key]} {lbl}
+              </button>
+            )
+          })}
+        </div>
+
         <div style={{
           display: 'flex', flexDirection: isMobile ? 'row' : 'row',
           gap: isMobile ? 14 : 20, marginBottom: 22,
@@ -1773,33 +1785,13 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
           </div>
         )}
 
-        {/* Status / Action row / Friends — same for every book, shelved or not */}
-        <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 18, marginBottom: 16 }}>
-          <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
-            textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Status</p>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            {Object.entries(STATUS_LABELS).map(([key, lbl]) => {
-              const active = status === key
-              const sc = STATUS_COLORS[key]
-              return (
-                <button key={key} onClick={() => handleStatusChange(key)}
-                  style={{
-                    cursor: 'pointer', fontFamily: f.sans, fontSize: 14, fontWeight: 700,
-                    padding: '10px 18px', borderRadius: 24, transition: 'all 0.15s',
-                    border: `1px solid ${active ? sc.color : C.border}`,
-                    background: active ? sc.color : C.surface2,
-                    color: active ? '#0f1117' : C.muted,
-                  }}>
-                  {STATUS_ICONS[key]} {lbl}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
         {/* Action row — WatchList style */}
-        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-          <ActionBox icon="⭐" label="Rate" badge={rating || null}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14, borderTop: `1px solid ${C.border}`, paddingTop: 18 }}>
+          <ActionBox icon="⭐" label="Rate"
+            sub={rating
+              ? <><StarRating value={rating} readonly size={9} /><span style={{ fontSize: 9, fontWeight: 700, color: C.muted }}>{rating}/5</span></>
+              : <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: '0.03em', color: C.muted }}>NOT RATED</span>
+            }
             active={showRatePanel} onClick={() => setShowRatePanel(o => !o)} />
           <ActionBox icon="📝" label="Notes"
             active={showNotesPanel} onClick={() => setShowNotesPanel(o => !o)} />
