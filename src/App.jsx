@@ -694,6 +694,7 @@ function PosterCard({ book, userBook, onClick, width, height, quickActions }) {
 // SearchResultCard – poster + quick-add buttons for search
 // ================================================================
 function SearchResultCard({ book, userId, myBookIds, onAdded, onOpenModal }) {
+  const isMobile = useIsMobile()
   const [hovered, setHovered] = useState(false)
   const [adding,  setAdding]  = useState(null)
   const [added,   setAdded]   = useState(null)
@@ -727,10 +728,14 @@ function SearchResultCard({ book, userId, myBookIds, onAdded, onOpenModal }) {
       {showRatingPopup && (
         <RatingPopup title={book.title} onRate={handleRated} onSkip={() => setShowRatingPopup(false)} />
       )}
-      <PosterCard book={book} onClick={onOpenModal} />
+      <PosterCard book={book} onClick={onOpenModal}
+        quickActions={isMobile && !isInLibrary ? Object.entries(STATUS_LABELS).map(([key, lbl]) => ({
+          title: lbl, icon: STATUS_ICONS[key], bg: STATUS_COLORS[key]?.color, onClick: () => handleAdd(key),
+        })) : undefined} />
 
-      {/* Hover overlay — icons only for books not already on any shelf */}
-      {hovered && (
+      {/* Hover overlay — desktop only; mobile shows the same actions pinned via
+          quickActions above, since touch devices have no hover to trigger this. */}
+      {!isMobile && hovered && (
         <div onClick={onOpenModal} style={{
           position: 'absolute', inset: 0, borderRadius: 8,
           background: 'rgba(10,8,24,0.72)',
@@ -2094,6 +2099,7 @@ function AuthPage({ inviteFrom, sharedBookId, sharedBy }) {
 // RecoCard – poster with WatchList-style hover quick-add circles
 // ================================================================
 function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal, caption }) {
+  const isMobile = useIsMobile()
   const [hovered,  setHovered]  = useState(false)
   const [adding,   setAdding]   = useState(null)
   const [added,    setAdded]    = useState(null)
@@ -2135,10 +2141,17 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal, ca
         <RatingPopup title={book.title} onRate={handleRated}
           onSkip={() => { setShowRating(false); onAdded?.(book.id) }} />
       )}
-      <PosterCard book={book} onClick={onOpenModal} />
+      <PosterCard book={book} onClick={onOpenModal}
+        quickActions={isMobile && !inLibrary ? [
+          { title: 'Reading',      icon: STATUS_ICONS.reading,      bg: STATUS_COLORS.reading.color,      onClick: () => handleAdd('reading') },
+          { title: 'Want to Read', icon: STATUS_ICONS.want_to_read, bg: STATUS_COLORS.want_to_read.color, onClick: () => handleAdd('want_to_read') },
+          { title: 'Read',         icon: STATUS_ICONS.read,         bg: STATUS_COLORS.read.color,         onClick: () => handleAdd('read') },
+          { title: 'Not for Me',   icon: '✕', bg: '#3d1f1f', fg: '#ff7070', onClick: handleDismiss },
+        ] : undefined} />
 
-      {/* Hover overlay — clicks on background open modal, buttons stop propagation */}
-      {hovered && (
+      {/* Hover overlay — desktop only; mobile shows the same actions pinned via quickActions above,
+          since touch devices have no hover to trigger this. Clicks on background open modal. */}
+      {!isMobile && hovered && (
         <div onClick={onOpenModal} style={{
           position: 'absolute', inset: 0, borderRadius: 8,
           background: 'rgba(10,8,24,0.72)',
@@ -2199,6 +2212,7 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal, ca
 // FriendBookCard – a book on a friend's shelf, with quick-add if you don't have it
 // ================================================================
 function FriendBookCard({ ub, profile, userId, myBookIds, onAdded, onOpenModal }) {
+  const isMobile = useIsMobile()
   const [hovered, setHovered] = useState(false)
   const [adding,  setAdding]  = useState(null)
   const [added,   setAdded]   = useState(null)
@@ -2220,8 +2234,11 @@ function FriendBookCard({ ub, profile, userId, myBookIds, onAdded, onOpenModal }
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}>
       <div style={{ position: 'relative' }}>
-        <PosterCard userBook={ub} onClick={onOpenModal} />
-        {hovered && !inLibrary && (
+        <PosterCard userBook={ub} onClick={onOpenModal}
+          quickActions={isMobile && !inLibrary ? Object.entries(STATUS_LABELS).map(([key, lbl]) => ({
+            title: lbl, icon: STATUS_ICONS[key], bg: STATUS_COLORS[key]?.color, onClick: () => handleAdd(key),
+          })) : undefined} />
+        {!isMobile && hovered && !inLibrary && (
           <div onClick={onOpenModal} style={{
             position: 'absolute', inset: 0, borderRadius: 8,
             background: 'rgba(10,8,24,0.72)',
@@ -3475,13 +3492,17 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
           borderRadius: 10,
           outline: ub.top_10 ? `3px solid ${C.accent}` : 'none',
         }}>
-          <PosterCard userBook={ub} onClick={() => setModal(book)} />
+          <PosterCard userBook={ub} onClick={() => setModal(book)}
+            quickActions={isMobile && !inLibrary ? [
+              ['reading', STATUS_ICONS.reading], ['want_to_read', STATUS_ICONS.want_to_read], ['read', STATUS_ICONS.read],
+            ].map(([st, icon]) => ({ title: STATUS_LABELS[st], icon, bg: STATUS_COLORS[st].color, onClick: () => quickAdd(book, st) })) : undefined} />
         </div>
 
-        {/* Hover overlay — icons only, matching Discover's style. Only rendered
-            when NOT already in your library, so there's nothing sitting on top
-            of the tile to block the click-to-open-modal for books you already have. */}
-        {isHovered && !inLibrary && (
+        {/* Hover overlay — desktop only; mobile shows the same actions pinned via
+            quickActions above, since touch devices have no hover to trigger this.
+            Only rendered when NOT already in your library, so there's nothing sitting
+            on top of the tile to block the click-to-open-modal for books you already have. */}
+        {!isMobile && isHovered && !inLibrary && (
           <div onClick={() => setModal(book)} style={{
             position: 'absolute', inset: 0, borderRadius: 8,
             background: 'rgba(10,8,24,0.72)',
@@ -4130,11 +4151,15 @@ function FriendsPage({ userId }) {
                   onMouseLeave={() => setHoveredShelfId(null)}
                   style={{ position: 'relative' }}
                 >
-                  <PosterCard userBook={ub} onClick={() => setModal({ book: ub.books, userBook: ub })} />
+                  <PosterCard userBook={ub} onClick={() => setModal({ book: ub.books, userBook: ub })}
+                    quickActions={isMobile && !inLibrary ? [
+                      ['reading', STATUS_ICONS.reading], ['want_to_read', STATUS_ICONS.want_to_read], ['read', STATUS_ICONS.read],
+                    ].map(([st, icon]) => ({ title: STATUS_LABELS[st], icon, bg: STATUS_COLORS[st].color, onClick: () => quickAddToShelf(book, st) })) : undefined} />
 
-                  {/* Hover icons — only shown if not already on your shelf, so
+                  {/* Hover icons — desktop only; mobile shows the same actions pinned via
+                      quickActions above. Only shown if not already on your shelf, so
                       there's nothing blocking the click-to-open-modal otherwise. */}
-                  {isHovered && !inLibrary && (
+                  {!isMobile && isHovered && !inLibrary && (
                     <div onClick={() => setModal({ book: ub.books, userBook: ub })} style={{
                       position: 'absolute', inset: 0, borderRadius: 8,
                       background: 'rgba(10,8,24,0.72)',
