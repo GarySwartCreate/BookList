@@ -2664,10 +2664,12 @@ function SearchPage({ userId }) {
   const [modal,        setModal]        = useState(null)
   const debounceRef = useRef(null)
 
-  useEffect(() => {
-    supabase.from('user_books').select('book_id').eq('user_id', userId)
-      .then(({ data }) => setMyBookIds(new Set((data || []).map(r => r.book_id))))
+  const loadMyBookIds = useCallback(async () => {
+    const { data } = await supabase.from('user_books').select('book_id').eq('user_id', userId)
+    setMyBookIds(new Set((data || []).map(r => r.book_id)))
   }, [userId])
+
+  useEffect(() => { loadMyBookIds() }, [loadMyBookIds])
 
   useEffect(() => {
     if (!searchQ.trim()) { setSearchRes([]); setSearchErr(null); setSearchSource(null); return }
@@ -2766,7 +2768,7 @@ function SearchPage({ userId }) {
           item={modal.book}
           userId={userId}
           onClose={() => setModal(null)}
-          onUpdate={() => {}}
+          onUpdate={loadMyBookIds}
         />
       )}
     </div>
@@ -3437,6 +3439,13 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
     setAddingBook(null)
   }
 
+  // Refreshes which books are on MY shelf (used for the "in library" state on
+  // this friend's tiles) after the detail modal changes my own status for a book.
+  async function refreshMyBooks() {
+    const { data } = await supabase.from('user_books').select('book_id').eq('user_id', userId)
+    setMyBookIds(new Set((data || []).map(r => r.book_id)))
+  }
+
   const reading    = books.filter(u => u.status === 'reading')
   const wantToRead = books.filter(u => u.status === 'want_to_read')
   const readAll    = books.filter(u => u.status === 'read')
@@ -3691,7 +3700,7 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
       {modal && (
         <BookDetailModal item={modal} userId={userId}
           onClose={() => setModal(null)}
-          onUpdate={() => {}} />
+          onUpdate={refreshMyBooks} />
       )}
     </div>
   )
@@ -5461,6 +5470,10 @@ export default function App() {
   const [theme,   setTheme]   = useState(() => localStorage.getItem('bl-theme') || 'dark')
   const [globalAdd,   setGlobalAdd]   = useState(false) // header + button — general add-a-book modal
   const [globalModal, setGlobalModal] = useState(null)  // BookDetailModal opened from that modal
+  // Bumped whenever a status/shelf change happens from this global modal, so the
+  // currently-visible page (which owns its own data-fetch effect) remounts and
+  // re-fetches instead of showing stale data until a hard refresh.
+  const [refreshKey, setRefreshKey] = useState(0)
   const [showActivity, setShowActivity] = useState(false) // header bell — activity feed
   const [showMessages, setShowMessages] = useState(false) // header plane — messages inbox
 
@@ -5585,12 +5598,12 @@ export default function App() {
         onMessagesClick={() => setShowMessages(true)} />
       <main style={{ maxWidth: 960, margin: '0 auto', padding: isMobile ? '20px 28px 84px' : '32px 20px 80px' }}>
         {drillIn ? (
-          <MyListPage userId={userId} initialFilter={drillIn.filter}
+          <MyListPage key={refreshKey} userId={userId} initialFilter={drillIn.filter}
             lockedFilter={drillIn.locked ? drillIn.filter : null}
             onBack={() => setDrillIn(null)} />
         ) : (
           <>
-            {view === 'home'     && <HomePage     userId={userId}
+            {view === 'home'     && <HomePage     key={refreshKey} userId={userId}
               onOpenList={(filter, locked) => setDrillIn({ filter, locked })} />}
             {view === 'discover' && <DiscoverPage userId={userId} />}
             {view === 'search'   && <SearchPage   userId={userId} />}
@@ -5623,7 +5636,7 @@ export default function App() {
           item={globalModal.type === 'library' ? globalModal.userBook : (globalModal.book || globalModal.userBook?.books)}
           userId={userId}
           onClose={() => setGlobalModal(null)}
-          onUpdate={() => {}}
+          onUpdate={() => setRefreshKey(k => k + 1)}
         />
       )}
 
