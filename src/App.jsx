@@ -3478,50 +3478,48 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
           <PosterCard userBook={ub} onClick={() => setModal(book)} />
         </div>
 
-        {/* Hover overlay with quick-add buttons */}
-        {isHovered && !inLibrary && (
-          <div style={{
+        {/* Hover overlay — matches Discover's icon-row style. Clicking the
+            background (not a button) always opens the modal, in-library or not. */}
+        {isHovered && (
+          <div onClick={() => setModal(book)} style={{
             position: 'absolute', inset: 0, borderRadius: 8,
-            background: 'rgba(10,8,24,0.82)',
+            background: 'rgba(10,8,24,0.72)',
             display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center', gap: 8,
-            padding: 10,
+            alignItems: 'center', justifyContent: 'flex-end',
+            paddingBottom: 14,
           }}>
-            <p style={{ margin: 0, fontSize: 10, color: C.muted, fontFamily: f.sans, textAlign: 'center' }}>
-              Add to your library:
-            </p>
-            {[
-              ['want_to_read', '👀', 'Want'],
-              ['reading',      '▶', 'Reading'],
-              ['read',         '✅', 'Read'],
-            ].map(([st, icon, lbl]) => (
-              <button key={st} onClick={() => quickAdd(book, st)}
-                disabled={!!addingBook}
-                style={{
-                  width: '100%', padding: '6px 4px', borderRadius: 6,
-                  border: 'none', cursor: addingBook ? 'not-allowed' : 'pointer',
-                  fontFamily: f.sans, fontSize: 11, fontWeight: 700,
-                  background: st === 'want_to_read' ? C.accent
-                    : st === 'reading' ? C.primary : C.success,
-                  color: st === 'want_to_read' ? '#0f1117' : C.white,
-                  opacity: addingBook && addingBook !== book.id + st ? 0.6 : 1,
-                }}>
-                {addingBook === book.id + st ? '…' : `${icon} ${lbl}`}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Already in library badge on hover */}
-        {isHovered && inLibrary && (
-          <div style={{
-            position: 'absolute', inset: 0, borderRadius: 8,
-            background: 'rgba(10,8,24,0.7)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <span style={{ fontSize: 12, color: C.success, fontFamily: f.sans, fontWeight: 700 }}>
-              ✓ In library
-            </span>
+            {inLibrary ? (
+              <div style={{
+                background: 'rgba(52,211,153,0.15)', borderRadius: 6,
+                padding: '4px 10px', fontSize: 11, color: C.success,
+                fontFamily: f.sans, fontWeight: 700,
+              }}>
+                ✓ In library
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: 8 }} onClick={e => e.stopPropagation()}>
+                {[
+                  ['reading',      STATUS_ICONS.reading],
+                  ['want_to_read', STATUS_ICONS.want_to_read],
+                  ['read',         STATUS_ICONS.read],
+                ].map(([st, icon]) => (
+                  <button key={st} title={STATUS_LABELS[st]} disabled={!!addingBook}
+                    onClick={() => quickAdd(book, st)}
+                    style={{
+                      width: 30, height: 30, borderRadius: '50%', border: 'none',
+                      background: STATUS_COLORS[st].color, color: '#0f1117',
+                      cursor: addingBook ? 'not-allowed' : 'pointer', fontSize: 13,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
+                      opacity: addingBook && addingBook !== book.id + st ? 0.5 : 1,
+                      transition: 'transform 0.1s, opacity 0.1s',
+                      transform: addingBook === book.id + st ? 'scale(0.9)' : 'scale(1)',
+                    }}>
+                    {addingBook === book.id + st ? '…' : icon}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
