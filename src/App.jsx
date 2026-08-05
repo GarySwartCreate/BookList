@@ -3478,9 +3478,10 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
           <PosterCard userBook={ub} onClick={() => setModal(book)} />
         </div>
 
-        {/* Hover overlay — matches Discover's icon-row style. Clicking the
-            background (not a button) always opens the modal, in-library or not. */}
-        {isHovered && (
+        {/* Hover overlay — icons only, matching Discover's style. Only rendered
+            when NOT already in your library, so there's nothing sitting on top
+            of the tile to block the click-to-open-modal for books you already have. */}
+        {isHovered && !inLibrary && (
           <div onClick={() => setModal(book)} style={{
             position: 'absolute', inset: 0, borderRadius: 8,
             background: 'rgba(10,8,24,0.72)',
@@ -3488,38 +3489,28 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
             alignItems: 'center', justifyContent: 'flex-end',
             paddingBottom: 14,
           }}>
-            {inLibrary ? (
-              <div style={{
-                background: 'rgba(52,211,153,0.15)', borderRadius: 6,
-                padding: '4px 10px', fontSize: 11, color: C.success,
-                fontFamily: f.sans, fontWeight: 700,
-              }}>
-                ✓ In library
-              </div>
-            ) : (
-              <div style={{ display: 'flex', gap: 8 }} onClick={e => e.stopPropagation()}>
-                {[
-                  ['reading',      STATUS_ICONS.reading],
-                  ['want_to_read', STATUS_ICONS.want_to_read],
-                  ['read',         STATUS_ICONS.read],
-                ].map(([st, icon]) => (
-                  <button key={st} title={STATUS_LABELS[st]} disabled={!!addingBook}
-                    onClick={() => quickAdd(book, st)}
-                    style={{
-                      width: 30, height: 30, borderRadius: '50%', border: 'none',
-                      background: STATUS_COLORS[st].color, color: '#0f1117',
-                      cursor: addingBook ? 'not-allowed' : 'pointer', fontSize: 13,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
-                      opacity: addingBook && addingBook !== book.id + st ? 0.5 : 1,
-                      transition: 'transform 0.1s, opacity 0.1s',
-                      transform: addingBook === book.id + st ? 'scale(0.9)' : 'scale(1)',
-                    }}>
-                    {addingBook === book.id + st ? '…' : icon}
-                  </button>
-                ))}
-              </div>
-            )}
+            <div style={{ display: 'flex', gap: 8 }} onClick={e => e.stopPropagation()}>
+              {[
+                ['reading',      STATUS_ICONS.reading],
+                ['want_to_read', STATUS_ICONS.want_to_read],
+                ['read',         STATUS_ICONS.read],
+              ].map(([st, icon]) => (
+                <button key={st} title={STATUS_LABELS[st]} disabled={!!addingBook}
+                  onClick={() => quickAdd(book, st)}
+                  style={{
+                    width: 30, height: 30, borderRadius: '50%', border: 'none',
+                    background: STATUS_COLORS[st].color, color: '#0f1117',
+                    cursor: addingBook ? 'not-allowed' : 'pointer', fontSize: 13,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
+                    opacity: addingBook && addingBook !== book.id + st ? 0.5 : 1,
+                    transition: 'transform 0.1s, opacity 0.1s',
+                    transform: addingBook === book.id + st ? 'scale(0.9)' : 'scale(1)',
+                  }}>
+                  {addingBook === book.id + st ? '…' : icon}
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -3818,6 +3809,17 @@ function FriendsPage({ userId }) {
   const [shelfLoading, setShelfLoading] = useState(true)
   const [tasteMap,     setTasteMap]     = useState({}) // friendId -> match %
   const [recommendTo,  setRecommendTo]  = useState(null) // friendProfile being sent a book
+  const [hoveredShelfId, setHoveredShelfId] = useState(null) // aggregated shelf grid — tile being hovered
+  const [shelfAdding,    setShelfAdding]    = useState(null) // aggregated shelf grid — `${bookId}${status}` in flight
+
+  async function quickAddToShelf(book, status) {
+    setShelfAdding(book.id + status)
+    try {
+      await addToLibrary(userId, book, status)
+      setMyBookIds(prev => new Set([...prev, book.id]))
+    } catch (e) { alert(e.message) }
+    setShelfAdding(null)
+  }
 
   function copyInviteLink() {
     const link = `${window.location.origin}${window.location.pathname}?invite=${userId}`
@@ -4118,15 +4120,60 @@ function FriendsPage({ userId }) {
             gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
             gap: isMobile ? 9 : 16,
           }}>
-            {shelfVisible.map(ub => (
-              <div key={ub.id}>
-                <PosterCard userBook={ub} onClick={() => setModal({ book: ub.books, userBook: ub })} />
-                <p style={{ margin: '4px 0 0', fontSize: 10, color: C.muted, fontFamily: f.sans,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {profileMap[ub.user_id]?.display_name || profileMap[ub.user_id]?.username || ''}
-                </p>
-              </div>
-            ))}
+            {shelfVisible.map(ub => {
+              const book = ub.books || {}
+              const inLibrary = myBookIds.has(ub.book_id)
+              const isHovered = hoveredShelfId === ub.id
+              return (
+                <div key={ub.id}
+                  onMouseEnter={() => setHoveredShelfId(ub.id)}
+                  onMouseLeave={() => setHoveredShelfId(null)}
+                  style={{ position: 'relative' }}
+                >
+                  <PosterCard userBook={ub} onClick={() => setModal({ book: ub.books, userBook: ub })} />
+
+                  {/* Hover icons — only shown if not already on your shelf, so
+                      there's nothing blocking the click-to-open-modal otherwise. */}
+                  {isHovered && !inLibrary && (
+                    <div onClick={() => setModal({ book: ub.books, userBook: ub })} style={{
+                      position: 'absolute', inset: 0, borderRadius: 8,
+                      background: 'rgba(10,8,24,0.72)',
+                      display: 'flex', flexDirection: 'column',
+                      alignItems: 'center', justifyContent: 'flex-end',
+                      paddingBottom: 14,
+                    }}>
+                      <div style={{ display: 'flex', gap: 8 }} onClick={e => e.stopPropagation()}>
+                        {[
+                          ['reading',      STATUS_ICONS.reading],
+                          ['want_to_read', STATUS_ICONS.want_to_read],
+                          ['read',         STATUS_ICONS.read],
+                        ].map(([st, icon]) => (
+                          <button key={st} title={STATUS_LABELS[st]} disabled={!!shelfAdding}
+                            onClick={() => quickAddToShelf(book, st)}
+                            style={{
+                              width: 30, height: 30, borderRadius: '50%', border: 'none',
+                              background: STATUS_COLORS[st].color, color: '#0f1117',
+                              cursor: shelfAdding ? 'not-allowed' : 'pointer', fontSize: 13,
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
+                              opacity: shelfAdding && shelfAdding !== book.id + st ? 0.5 : 1,
+                              transition: 'transform 0.1s, opacity 0.1s',
+                              transform: shelfAdding === book.id + st ? 'scale(0.9)' : 'scale(1)',
+                            }}>
+                            {shelfAdding === book.id + st ? '…' : icon}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <p style={{ margin: '4px 0 0', fontSize: 10, color: C.muted, fontFamily: f.sans,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {profileMap[ub.user_id]?.display_name || profileMap[ub.user_id]?.username || ''}
+                  </p>
+                </div>
+              )
+            })}
           </div>
         )
       }
