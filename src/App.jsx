@@ -1445,7 +1445,7 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
         // user_books.user_id references auth.users, not profiles — no FK for PostgREST
         // to auto-embed, so fetch profiles separately and merge in JS.
         const [{ data: rows }, { data: profs }] = await Promise.all([
-          supabase.from('user_books').select('status, rating, user_id')
+          supabase.from('user_books').select('status, rating, top_10, user_id')
             .eq('book_id', book.id).in('user_id', friendIds),
           supabase.from('profiles').select('id, display_name, username, avatar_url').in('id', friendIds),
         ])
@@ -1508,6 +1508,7 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
                 }}>{fb.profiles?.display_name || fb.profiles?.username}</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                {fb.top_10 && <span title="Top 10 favorite" style={{ fontSize: 14 }}>🏆</span>}
                 <StatusBadge status={fb.status} />
                 {fb.rating > 0 && <StarRating value={fb.rating} readonly size={13} />}
               </div>
@@ -3676,6 +3677,7 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
   const [showReadFilter, setShowReadFilter] = useState(false)
   const [readSort,     setReadSort]     = useState('default')
   const [readGenre,    setReadGenre]    = useState('all')
+  const [readFavOnly,  setReadFavOnly]  = useState(false)
   const [expandReading,     setExpandReading]     = useState(false)
   const [expandWantToRead,  setExpandWantToRead]  = useState(false)
   const [expandRead,        setExpandRead]        = useState(true) // Read defaults open; count is still clickable to collapse
@@ -3709,7 +3711,8 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
   const readAll    = books.filter(u => u.status === 'read')
   const readGenres = useMemo(() => topCategories(readAll.map(u => u.books || {})), [books])
   const read = (() => {
-    const list = readGenre === 'all' ? readAll : readAll.filter(u => bookGenres(u.books).includes(readGenre))
+    let list = readGenre === 'all' ? readAll : readAll.filter(u => bookGenres(u.books).includes(readGenre))
+    if (readFavOnly) list = list.filter(u => u.top_10)
     if (readSort === 'recent') return list
     if (readSort === 'top_rated') return [...list].sort((a, b) => (b.rating || 0) - (a.rating || 0))
     return [...list].sort((a, b) => {
@@ -3931,6 +3934,9 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
                     {lbl}
                   </button>
                 ))}
+                <button onClick={() => setReadFavOnly(o => !o)} style={{ ...pill(readFavOnly), fontSize: 12 }}>
+                  🏆 Favorites
+                </button>
               </div>
               {readGenres.length > 0 && (
                 <>
@@ -3953,7 +3959,7 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
 
           {loading ? <Spinner /> : read.length === 0
             ? <p style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, fontStyle: 'italic', margin: 0 }}>
-                Nothing marked as read yet
+                {readFavOnly ? "No favorites yet" : "Nothing marked as read yet"}
               </p>
             : (
               <div style={{
@@ -4718,6 +4724,7 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
   const visibleBooks = (() => {
     let list = bookStatus === 'all' ? allBooks
       : bookStatus === 'rated' ? allBooks.filter(u => (u.rating || 0) > 0)
+      : bookStatus === 'favorites' ? allBooks.filter(u => u.top_10)
       : allBooks.filter(u => u.status === bookStatus)
     if (bookSort === 'top_rated') return [...list].sort((a, b) => (b.rating || 0) - (a.rating || 0))
     if (bookSort === 'recent') return list // already fetched updated_at desc
