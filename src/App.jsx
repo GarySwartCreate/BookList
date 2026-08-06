@@ -3741,13 +3741,7 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
         onMouseLeave={() => setHoveredId(null)}
         style={{ position: 'relative' }}
       >
-        {/* Top 10 gold border if friend has it */}
-        <div style={{
-          borderRadius: 10,
-          outline: ub.top_10 ? `3px solid ${C.accent}` : 'none',
-        }}>
-          <PosterCard userBook={ub} onClick={handleTap} />
-        </div>
+        <PosterCard userBook={ub} onClick={handleTap} />
 
         {/* Hover overlay — icons only, matching Discover's style. Only rendered
             when NOT already in your library, so there's nothing sitting on top
