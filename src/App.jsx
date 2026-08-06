@@ -4891,7 +4891,9 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
   const [hoveredId,     setHoveredId]    = useState(null)
   const [showAdd,       setShowAdd]      = useState(false)
   const [showShare,     setShowShare]    = useState(false)
+  const [showMembers,   setShowMembers]  = useState(false)
   const [members,       setMembers]      = useState([])
+  const [ownerProfile,  setOwnerProfile] = useState(null)
   const hideTimerRef = useRef(null)
   useEffect(() => () => clearTimeout(hideTimerRef.current), [])
 
@@ -4912,14 +4914,15 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
     // PostgREST to auto-embed, so fetch profiles separately and merge in JS.
     supabase.from('book_list_shares').select('user_id').eq('list_id', list.id)
       .then(async ({ data: shares }) => {
-        if (!shares?.length) { setMembers([]); return }
-        const ids = shares.map(s => s.user_id)
+        const shareIds = (shares || []).map(s => s.user_id)
+        const allIds = [...new Set([list.owner_id, ...shareIds])]
         const { data: profs } = await supabase.from('profiles')
-          .select('id, display_name, username, avatar_url').in('id', ids)
+          .select('id, display_name, username, avatar_url').in('id', allIds)
         const profileMap = Object.fromEntries((profs || []).map(p => [p.id, p]))
-        setMembers(shares.map(s => ({ ...s, profiles: profileMap[s.user_id] })))
+        setOwnerProfile(profileMap[list.owner_id] || null)
+        setMembers(shareIds.map(id => ({ user_id: id, profiles: profileMap[id] })))
       })
-  }, [list.id])
+  }, [list.id, list.owner_id])
 
   async function handleStatusChange(item, status) {
     setItems(prev => prev.map(i => i.id === item.id ? { ...i, status } : i))
@@ -5033,17 +5036,51 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
           )}
         </div>
         <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+          <button onClick={() => setShowMembers(o => !o)} style={{ ...pill(showMembers), fontSize: 13 }}>
+            👥 {members.length + 1} Member{members.length === 0 ? '' : 's'}
+          </button>
           {isOwner && (
-            <button onClick={() => setShowShare(true)} style={btn('subtle', 'sm')}>👥 Share</button>
+            <button onClick={() => setShowShare(true)} style={btn('subtle', 'sm')}>+ Share</button>
           )}
           <button onClick={() => setShowAdd(true)} style={btn('accent', 'sm')}>+ Add Book</button>
         </div>
       </div>
 
-      {members.length > 0 && (
-        <p style={{ margin: '0 0 24px', color: C.muted, fontFamily: f.sans, fontSize: 12 }}>
-          Shared with {members.map(m => m.profiles?.display_name || m.profiles?.username || 'a friend').join(', ')}
-        </p>
+      {showMembers && (
+        <div style={{
+          background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10,
+          padding: 14, marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 10,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{
+              fontSize: 18, width: 30, height: 30, borderRadius: '50%',
+              background: C.surface2, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            }}>{ownerProfile?.avatar_url || '📖'}</span>
+            <span style={{ color: C.text, fontFamily: f.sans, fontSize: 14, fontWeight: 600 }}>
+              {isOwner ? 'You' : (ownerProfile?.display_name || ownerProfile?.username || 'Unknown')}
+            </span>
+            <span style={{
+              fontSize: 10, fontWeight: 700, color: C.muted, background: C.surface2,
+              borderRadius: 6, padding: '2px 6px', textTransform: 'uppercase', letterSpacing: '0.04em',
+            }}>Owner</span>
+          </div>
+          {members.map(m => (
+            <div key={m.user_id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{
+                fontSize: 18, width: 30, height: 30, borderRadius: '50%',
+                background: C.surface2, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}>{m.profiles?.avatar_url || '📖'}</span>
+              <span style={{ color: C.text, fontFamily: f.sans, fontSize: 14, fontWeight: 600 }}>
+                {m.user_id === userId ? 'You' : (m.profiles?.display_name || m.profiles?.username || 'a friend')}
+              </span>
+            </div>
+          ))}
+          {members.length === 0 && (
+            <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans, fontStyle: 'italic' }}>
+              Not shared with anyone yet{isOwner ? ' — use Share to add friends' : ''}.
+            </p>
+          )}
+        </div>
       )}
 
       {loading ? <Spinner /> : items.length === 0 ? (
