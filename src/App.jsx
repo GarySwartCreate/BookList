@@ -4103,6 +4103,37 @@ function FriendsPage({ userId }) {
   const shelfHideTimerRef = useRef(null)
   useEffect(() => () => clearTimeout(shelfHideTimerRef.current), [])
 
+  // Shared lists (book-club style) — owned by me, or shared with me by a friend
+  const [lists,        setLists]        = useState([])
+  const [listsLoading,  setListsLoading]  = useState(true)
+  const [listView,     setListView]     = useState(null) // list being viewed in detail
+  const [showNewList,  setShowNewList]  = useState(false)
+
+  const loadLists = useCallback(async () => {
+    setListsLoading(true)
+    const [{ data: owned }, { data: sharedRows }] = await Promise.all([
+      supabase.from('book_lists').select('*').eq('owner_id', userId).order('created_at', { ascending: false }),
+      supabase.from('book_list_shares').select('book_lists(*)').eq('user_id', userId),
+    ])
+    const shared = (sharedRows || []).map(r => r.book_lists).filter(Boolean)
+    const merged = [
+      ...(owned || []).map(l => ({ ...l, isOwner: true })),
+      ...shared.map(l => ({ ...l, isOwner: false })),
+    ]
+    // Item counts, fetched in one shot for all lists at once
+    if (merged.length > 0) {
+      const { data: counts } = await supabase.from('book_list_items')
+        .select('list_id').in('list_id', merged.map(l => l.id))
+      const countMap = {}
+      ;(counts || []).forEach(r => { countMap[r.list_id] = (countMap[r.list_id] || 0) + 1 })
+      merged.forEach(l => { l.itemCount = countMap[l.id] || 0 })
+    }
+    setLists(merged)
+    setListsLoading(false)
+  }, [userId])
+
+  useEffect(() => { loadLists() }, [loadLists])
+
   async function quickAddToShelf(book, status) {
     setShelfAdding(book.id + status)
     try {
@@ -4242,6 +4273,20 @@ function FriendsPage({ userId }) {
         myBookIds={myBookIds}
         setMyBookIds={setMyBookIds}
         onBack={() => setFriendView(null)}
+      />
+    )
+  }
+
+  // If viewing a shared list's full detail, render that component
+  if (listView) {
+    return (
+      <ListDetailView
+        list={listView}
+        userId={userId}
+        friends={friends}
+        myBookIds={myBookIds}
+        onBack={() => setListView(null)}
+        onListChanged={loadLists}
       />
     )
   }
@@ -4387,6 +4432,50 @@ function FriendsPage({ userId }) {
         <RecommendPopover userId={userId} friend={recommendTo} onClose={() => setRecommendTo(null)} />
       )}
 
+      <Accordion icon="📋" title={`Lists (${lists.length})`}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+          <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans, flex: 1, minWidth: 180 }}>
+            Curate a shared reading list — for a book club, a trip, or anything else — and share it with friends.
+          </p>
+          <button onClick={() => setShowNewList(true)} style={{ ...btn('accent', 'sm'), flexShrink: 0 }}>
+            + New List
+          </button>
+        </div>
+
+        {listsLoading ? <Spinner /> : lists.length === 0
+          ? <EmptyState icon="📋" message="No lists yet" sub="Create one to start planning a shared shelf" />
+          : lists.map(list => (
+              <div key={list.id} style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '12px 0', borderBottom: `1px solid ${C.border}`, gap: 12,
+              }}>
+                <div style={{ minWidth: 0 }}>
+                  <p style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 14, color: C.text, fontFamily: f.sans }}>
+                    {list.name}
+                    {list.isOwner && (
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, color: C.muted, background: C.surface2,
+                        borderRadius: 6, padding: '2px 6px', textTransform: 'uppercase', letterSpacing: '0.04em',
+                      }}>Owner</span>
+                    )}
+                  </p>
+                  <p style={{ margin: '2px 0 0', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
+                    {list.itemCount} book{list.itemCount === 1 ? '' : 's'}
+                  </p>
+                </div>
+                <button onClick={() => setListView(list)} style={{ ...btn('ghost', 'sm'), fontSize: 13, flexShrink: 0 }}>
+                  View →
+                </button>
+              </div>
+            ))
+        }
+      </Accordion>
+
+      {showNewList && (
+        <CreateListModal userId={userId} onClose={() => setShowNewList(false)}
+          onCreated={(list) => { setShowNewList(false); loadLists(); setListView({ ...list, isOwner: true, itemCount: 0 }) }} />
+      )}
+
       {/* Aggregated friends' shelf */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '28px 0 14px', gap: 10, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -4500,6 +4589,484 @@ function FriendsPage({ userId }) {
         <BookDetailModal item={modal.book} userId={userId}
           onClose={() => setModal(null)}
           onUpdate={() => loadFriendships()} />
+      )}
+    </div>
+  )
+}
+
+// ================================================================
+// CreateListModal – name + description, creates a new shared list
+// ================================================================
+function CreateListModal({ userId, onClose, onCreated }) {
+  const isMobile = useIsMobile()
+  const [name,        setName]        = useState('')
+  const [description, setDescription] = useState('')
+  const [saving,       setSaving]      = useState(false)
+  const [err,          setErr]         = useState(null)
+
+  async function handleCreate() {
+    if (!name.trim()) return
+    setSaving(true)
+    setErr(null)
+    try {
+      const { data, error } = await supabase.from('book_lists')
+        .insert({ owner_id: userId, name: name.trim(), description: description.trim() || null })
+        .select().single()
+      if (error) throw error
+      onCreated?.(data)
+    } catch (e) {
+      setErr(e.message)
+    }
+    setSaving(false)
+  }
+
+  return (
+    <div onClick={e => e.target === e.currentTarget && onClose()}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1200,
+        background: 'rgba(5,4,15,0.92)', backdropFilter: 'blur(6px)',
+        display: 'flex', alignItems: isMobile ? 'flex-end' : 'center',
+        justifyContent: 'center', padding: isMobile ? 0 : 20,
+      }}>
+      <div style={{
+        background: C.surface, width: '100%', maxWidth: isMobile ? '100%' : 440,
+        borderRadius: isMobile ? '16px 16px 0 0' : 14,
+        padding: isMobile ? '20px 16px 28px' : 24,
+        border: `1px solid ${C.border}`, boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
+      }}>
+        <h3 style={{ margin: '0 0 16px', color: C.text, fontFamily: f.serif, fontSize: 20 }}>📋 New List</h3>
+        <input autoFocus value={name} onChange={e => setName(e.target.value)}
+          placeholder="List name — e.g. Book Club Picks"
+          style={{ ...inputStyle, marginBottom: 10 }} />
+        <textarea value={description} onChange={e => setDescription(e.target.value)}
+          placeholder="Description (optional)"
+          rows={3} style={{ ...inputStyle, resize: 'vertical', marginBottom: 14 }} />
+        {err && <p style={{ margin: '0 0 10px', color: C.danger, fontSize: 12, fontFamily: f.sans }}>{err}</p>}
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={btn('subtle', 'sm')}>Cancel</button>
+          <button onClick={handleCreate} disabled={saving || !name.trim()} style={btn('accent', 'sm')}>
+            {saving ? 'Creating…' : 'Create List'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
+// ShareListModal – owner picks which friends can see/edit a list
+// ================================================================
+function ShareListModal({ list, userId, friends, onClose }) {
+  const isMobile = useIsMobile()
+  const [sharedIds, setSharedIds] = useState(new Set())
+  const [loading,   setLoading]   = useState(true)
+  const [busyId,    setBusyId]    = useState(null)
+
+  useEffect(() => {
+    supabase.from('book_list_shares').select('user_id').eq('list_id', list.id)
+      .then(({ data }) => {
+        setSharedIds(new Set((data || []).map(r => r.user_id)))
+        setLoading(false)
+      })
+  }, [list.id])
+
+  async function toggle(friendId) {
+    setBusyId(friendId)
+    try {
+      if (sharedIds.has(friendId)) {
+        await supabase.from('book_list_shares').delete().eq('list_id', list.id).eq('user_id', friendId)
+        setSharedIds(prev => { const n = new Set(prev); n.delete(friendId); return n })
+      } else {
+        await supabase.from('book_list_shares').insert({ list_id: list.id, user_id: friendId })
+        setSharedIds(prev => new Set([...prev, friendId]))
+      }
+    } catch (e) { alert(e.message) }
+    setBusyId(null)
+  }
+
+  return (
+    <div onClick={e => e.target === e.currentTarget && onClose()}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1200,
+        background: 'rgba(5,4,15,0.92)', backdropFilter: 'blur(6px)',
+        display: 'flex', alignItems: isMobile ? 'flex-end' : 'center',
+        justifyContent: 'center', padding: isMobile ? 0 : 20,
+      }}>
+      <div style={{
+        background: C.surface, width: '100%', maxWidth: isMobile ? '100%' : 440,
+        maxHeight: isMobile ? '80vh' : '75vh', overflowY: 'auto',
+        borderRadius: isMobile ? '16px 16px 0 0' : 14,
+        padding: isMobile ? '20px 16px 28px' : 24,
+        border: `1px solid ${C.border}`, boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+          <h3 style={{ margin: 0, color: C.text, fontFamily: f.serif, fontSize: 20 }}>Share "{list.name}"</h3>
+          <button onClick={onClose} style={{
+            background: C.surface2, border: 'none', color: C.muted, borderRadius: '50%',
+            width: 28, height: 28, cursor: 'pointer', fontSize: 15,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>×</button>
+        </div>
+        <p style={{ margin: '0 0 16px', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
+          Anyone checked below can view this list and add books to it.
+        </p>
+        {loading ? <Spinner /> : friends.length === 0 ? (
+          <EmptyState icon="👥" message="No friends yet" sub="Add friends to share lists with them" />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {friends.map(f => {
+              const on = sharedIds.has(f.friendId)
+              return (
+                <button key={f.friendId} onClick={() => toggle(f.friendId)} disabled={busyId === f.friendId}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left',
+                    background: 'none', border: 'none', cursor: 'pointer', padding: '10px 0',
+                    borderBottom: `1px solid ${C.border}`, fontFamily: f.sans,
+                    opacity: busyId === f.friendId ? 0.6 : 1,
+                  }}>
+                  <span style={{
+                    width: 22, height: 22, borderRadius: 6, flexShrink: 0,
+                    border: `2px solid ${on ? C.primary : C.border}`,
+                    background: on ? C.primary : 'transparent',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: C.white, fontSize: 13, fontWeight: 700,
+                  }}>{on ? '✓' : ''}</span>
+                  <span style={{ color: C.text, fontSize: 14, fontWeight: 600 }}>
+                    {f.friendProfile?.display_name || f.friendProfile?.username || 'Unknown'}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
+// AddToListModal – search + add books directly onto a shared list
+// ================================================================
+function AddToListModal({ list, userId, existingBookIds, onClose, onAdded }) {
+  const isMobile = useIsMobile()
+  const [query,     setQuery]     = useState('')
+  const [results,   setResults]   = useState([])
+  const [searching, setSearching] = useState(false)
+  const [err,       setErr]       = useState(null)
+  const [addingId,  setAddingId]  = useState(null)
+  const debounceRef = useRef(null)
+
+  useEffect(() => {
+    if (!query.trim()) { setResults([]); setErr(null); return }
+    clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(async () => {
+      setSearching(true)
+      setErr(null)
+      try {
+        const { results } = await searchBooks(query, 20)
+        setResults(results)
+      } catch (e) {
+        setErr(e.message)
+        setResults([])
+      }
+      setSearching(false)
+    }, 380)
+    return () => clearTimeout(debounceRef.current)
+  }, [query])
+
+  async function handleAdd(book) {
+    setAddingId(book.id)
+    try {
+      await upsertBook(book)
+      const { error } = await supabase.from('book_list_items')
+        .insert({ list_id: list.id, book_id: book.id, status: 'want_to_read', added_by: userId })
+      if (error) throw error
+      onAdded?.(book.id)
+    } catch (e) { alert(e.message) }
+    setAddingId(null)
+  }
+
+  return (
+    <div onClick={e => e.target === e.currentTarget && onClose()}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1200,
+        background: 'rgba(5,4,15,0.92)', backdropFilter: 'blur(6px)',
+        display: 'flex', alignItems: isMobile ? 'flex-end' : 'center',
+        justifyContent: 'center', padding: isMobile ? 0 : 20,
+      }}>
+      <div style={{
+        background: C.surface, width: '100%', maxWidth: isMobile ? '100%' : 480,
+        maxHeight: isMobile ? '85vh' : '80vh',
+        borderRadius: isMobile ? '16px 16px 0 0' : 14,
+        padding: isMobile ? '18px 14px 24px' : 24,
+        overflowY: 'auto', border: `1px solid ${C.border}`,
+        boxShadow: '0 24px 80px rgba(0,0,0,0.7)', display: 'flex', flexDirection: 'column',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <h2 style={{ margin: 0, color: C.text, fontFamily: f.serif, fontSize: 19 }}>📚 Add to "{list.name}"</h2>
+          <button onClick={onClose} style={{
+            background: C.surface2, border: 'none', color: C.muted, borderRadius: '50%',
+            width: 28, height: 28, cursor: 'pointer', fontSize: 15,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>×</button>
+        </div>
+
+        <div style={{ position: 'relative', marginBottom: 14, flexShrink: 0 }}>
+          <input autoFocus value={query} onChange={e => setQuery(e.target.value)}
+            placeholder="🔍  Search by title, author, or ISBN…"
+            style={{ ...inputStyle, paddingRight: query ? 34 : undefined }} />
+          {query && (
+            <button onClick={() => setQuery('')} title="Clear search" style={{
+              position: 'absolute', top: '50%', right: 8, transform: 'translateY(-50%)',
+              width: 22, height: 22, borderRadius: '50%', border: 'none',
+              background: C.surface2, color: C.muted, cursor: 'pointer', fontSize: 13,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              WebkitTapHighlightColor: 'transparent',
+            }}>×</button>
+          )}
+        </div>
+
+        <div style={{ overflowY: 'auto' }}>
+          {searching ? <Spinner /> : err ? (
+            <p style={{ color: C.danger, fontFamily: f.sans, fontSize: 13 }}>{err}</p>
+          ) : results.length === 0 ? (
+            <p style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, fontStyle: 'italic', textAlign: 'center', padding: '20px 0' }}>
+              {query.trim() ? 'No results found' : 'Start typing to search'}
+            </p>
+          ) : results.map(book => {
+            const already = existingBookIds.has(book.id)
+            return (
+              <div key={book.id} style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                padding: '10px 0', borderBottom: `1px solid ${C.border}`,
+              }}>
+                {book.cover_url
+                  ? <img src={book.cover_url} alt="" style={{ width: 40, height: 60, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />
+                  : <NoCover title={book.title} width={40} height={60} />
+                }
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{
+                    margin: '0 0 2px', fontWeight: 700, fontSize: 13, color: C.text, fontFamily: f.sans,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>{book.title}</p>
+                  <p style={{
+                    margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>{book.authors?.join(', ')}</p>
+                </div>
+                {already ? (
+                  <span style={{ fontSize: 11, color: C.success, fontFamily: f.sans, fontWeight: 700, flexShrink: 0 }}>
+                    ✓ On list
+                  </span>
+                ) : (
+                  <button onClick={() => handleAdd(book)} disabled={!!addingId}
+                    style={{ ...btn('accent', 'sm'), fontSize: 12, flexShrink: 0, opacity: addingId && addingId !== book.id ? 0.5 : 1 }}>
+                    {addingId === book.id ? '…' : '+ Add'}
+                  </button>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
+// ListDetailView – full-page view of a shared list: Reading/Want to
+// Read/Read sections, add-book search, and (owner-only) share picker.
+// Any member (owner or shared-with) can add books and move them
+// between statuses — only the owner can rename/delete or manage shares.
+// ================================================================
+function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChanged }) {
+  const isMobile = useIsMobile()
+  const [items,        setItems]        = useState([])
+  const [loading,       setLoading]      = useState(true)
+  const [modal,         setModal]        = useState(null)
+  const [hoveredId,     setHoveredId]    = useState(null)
+  const [showAdd,       setShowAdd]      = useState(false)
+  const [showShare,     setShowShare]    = useState(false)
+  const [members,       setMembers]      = useState([])
+  const hideTimerRef = useRef(null)
+  useEffect(() => () => clearTimeout(hideTimerRef.current), [])
+
+  const isOwner = list.owner_id === userId
+
+  const loadItems = useCallback(async () => {
+    setLoading(true)
+    const { data } = await supabase.from('book_list_items').select('*, books(*)')
+      .eq('list_id', list.id).order('position', { ascending: true }).order('created_at', { ascending: false })
+    setItems(data || [])
+    setLoading(false)
+  }, [list.id])
+
+  useEffect(() => { loadItems() }, [loadItems])
+
+  useEffect(() => {
+    // book_list_shares.user_id references auth.users, not profiles — no FK for
+    // PostgREST to auto-embed, so fetch profiles separately and merge in JS.
+    supabase.from('book_list_shares').select('user_id').eq('list_id', list.id)
+      .then(async ({ data: shares }) => {
+        if (!shares?.length) { setMembers([]); return }
+        const ids = shares.map(s => s.user_id)
+        const { data: profs } = await supabase.from('profiles')
+          .select('id, display_name, username, avatar_url').in('id', ids)
+        const profileMap = Object.fromEntries((profs || []).map(p => [p.id, p]))
+        setMembers(shares.map(s => ({ ...s, profiles: profileMap[s.user_id] })))
+      })
+  }, [list.id])
+
+  async function handleStatusChange(item, status) {
+    setItems(prev => prev.map(i => i.id === item.id ? { ...i, status } : i))
+    await supabase.from('book_list_items').update({ status }).eq('id', item.id)
+  }
+
+  async function handleRemove(item) {
+    setItems(prev => prev.filter(i => i.id !== item.id))
+    await supabase.from('book_list_items').delete().eq('id', item.id)
+  }
+
+  const reading     = items.filter(i => i.status === 'reading')
+  const wantToRead  = items.filter(i => i.status === 'want_to_read')
+  const read        = items.filter(i => i.status === 'read')
+
+  function renderSection(title, icon, iconBg, list_) {
+    if (list_.length === 0) return null
+    return (
+      <div style={{ marginBottom: 22 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+          <SectionBadge icon={icon} bg={iconBg} />
+          <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontWeight: 700, fontFamily: f.sans }}>{title}</h2>
+          <CountPill n={list_.length} />
+        </div>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
+          gap: isMobile ? 9 : 16,
+        }}>
+          {list_.map(renderTile)}
+        </div>
+      </div>
+    )
+  }
+
+  function renderTile(item) {
+    const book = item.books || {}
+    const isHovered = hoveredId === item.id
+
+    function handleTap() {
+      if (isMobile && !isHovered) {
+        setHoveredId(item.id)
+        clearTimeout(hideTimerRef.current)
+        hideTimerRef.current = setTimeout(() => setHoveredId(null), 2500)
+        return
+      }
+      setModal(book)
+    }
+
+    return (
+      <div key={item.id}
+        onMouseEnter={() => setHoveredId(item.id)}
+        onMouseLeave={() => setHoveredId(null)}
+        style={{ position: 'relative' }}
+      >
+        <PosterCard book={book} onClick={handleTap} />
+        {isHovered && (
+          <div onClick={() => setModal(book)} style={{
+            position: 'absolute', inset: 0, borderRadius: 8,
+            background: 'rgba(10,8,24,0.72)',
+            display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'flex-end',
+            gap: 8, padding: '10px 8px 14px',
+          }}>
+            <p style={{ margin: 0, fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.85)', fontFamily: f.sans }}>
+              Move to:
+            </p>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {[
+                ['reading', STATUS_ICONS.reading, STATUS_COLORS.reading.color],
+                ['want_to_read', STATUS_ICONS.want_to_read, STATUS_COLORS.want_to_read.color],
+                ['read', STATUS_ICONS.read, STATUS_COLORS.read.color],
+              ].map(([st, icon, bg]) => (
+                <button key={st} title={STATUS_LABELS[st]} disabled={item.status === st}
+                  onClick={(e) => { e.stopPropagation(); handleStatusChange(item, st) }}
+                  style={{
+                    width: 28, height: 28, borderRadius: '50%', border: 'none',
+                    background: item.status === st ? C.surface2 : bg,
+                    color: item.status === st ? C.muted : '#0f1117',
+                    cursor: item.status === st ? 'default' : 'pointer', fontSize: 12,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    opacity: item.status === st ? 0.5 : 1,
+                  }}>{icon}</button>
+              ))}
+              <button title="Remove from list"
+                onClick={(e) => { e.stopPropagation(); handleRemove(item) }}
+                style={{
+                  width: 28, height: 28, borderRadius: '50%', border: 'none',
+                  background: '#3d1f1f', color: '#ff7070', cursor: 'pointer', fontSize: 12, fontWeight: 700,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>✕</button>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <button onClick={onBack} style={{
+        background: 'none', border: 'none', color: C.muted, fontFamily: f.sans,
+        fontSize: 13, cursor: 'pointer', padding: 0, marginBottom: 16,
+      }}>‹ Back to Friends</button>
+
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
+        <div>
+          <h1 style={{ margin: 0, color: C.text, fontFamily: f.serif, fontSize: 26 }}>📋 {list.name}</h1>
+          {list.description && (
+            <p style={{ margin: '4px 0 0', color: C.muted, fontFamily: f.sans, fontSize: 13 }}>{list.description}</p>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+          {isOwner && (
+            <button onClick={() => setShowShare(true)} style={btn('subtle', 'sm')}>👥 Share</button>
+          )}
+          <button onClick={() => setShowAdd(true)} style={btn('accent', 'sm')}>+ Add Book</button>
+        </div>
+      </div>
+
+      {members.length > 0 && (
+        <p style={{ margin: '0 0 24px', color: C.muted, fontFamily: f.sans, fontSize: 12 }}>
+          Shared with {members.map(m => m.profiles?.display_name || m.profiles?.username || 'a friend').join(', ')}
+        </p>
+      )}
+
+      {loading ? <Spinner /> : items.length === 0 ? (
+        <EmptyState icon="📋" message="Nothing on this list yet" sub="Add books to start planning" />
+      ) : (
+        <>
+          {renderSection('Reading', '▶', STATUS_COLORS.reading.color, reading)}
+          {renderSection('Want to Read', '👀', C.accent, wantToRead)}
+          {renderSection('Read', '✅', C.success, read)}
+        </>
+      )}
+
+      {showAdd && (
+        <AddToListModal list={list} userId={userId}
+          existingBookIds={new Set(items.map(i => i.book_id))}
+          onClose={() => setShowAdd(false)}
+          onAdded={() => { loadItems(); onListChanged?.() }} />
+      )}
+
+      {showShare && (
+        <ShareListModal list={list} userId={userId} friends={friends} onClose={() => setShowShare(false)} />
+      )}
+
+      {modal && (
+        <BookDetailModal item={modal} userId={userId}
+          onClose={() => setModal(null)}
+          onUpdate={() => {}} />
       )}
     </div>
   )
