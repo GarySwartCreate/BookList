@@ -220,20 +220,61 @@ function parseVolume(item) {
 // IDs — a Google Books volume ID, an Open Library `ol_...` ID, or a hash ID
 // generated during CSV import — depending on how it was added. ID-only
 // matching then misses "this is already on my shelf" whenever a friend's copy
-// was added via a different source than yours. Normalized title+author is a
-// reliable fallback match across those cases.
-function bookKey(book) {
-  const title  = (book?.title || '').trim().toLowerCase()
-  const author = (book?.authors?.[0] || '').trim().toLowerCase()
-  if (!title) return null
-  return `${title}|${author}`
+// (or a Discover result) was added via a different source than yours.
+//
+// A plain title+author string match isn't reliable enough either: providers
+// disagree on whether a subtitle lives in `title` ("Barbarian Days: A Surfing
+// Life") or gets dropped/moved to `subtitle`, and author strings vary in
+// formatting. So normalization strips subtitles/punctuation, and matching
+// falls back to "one normalized title starts with/contains the other" plus a
+// same-last-name author check, rather than requiring an exact string match.
+function normalizeTitle(title) {
+  return (title || '')
+    .toLowerCase()
+    .split(':')[0]                 // drop ": A Subtitle Like This"
+    .replace(/[^a-z0-9 ]/g, ' ')    // strip punctuation
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
-function isInMyLibrary(book, myBookIds, myBookKeys) {
+function authorLastName(author) {
+  const parts = (author || '').trim().split(/\s+/).filter(Boolean)
+  return (parts[parts.length - 1] || '').toLowerCase().replace(/[^a-z]/g, '')
+}
+
+function bookKey(book) {
+  const title = normalizeTitle(book?.title)
+  if (!title) return null
+  return `${title}|${authorLastName(book?.authors?.[0])}`
+}
+
+function titlesAreClose(a, b) {
+  if (!a || !b) return false
+  if (a === b) return true
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a]
+  if (shorter.length < 4) return false // too short to safely fuzzy-match
+  return longer.startsWith(shorter) || longer.includes(` ${shorter}`) || shorter.includes(longer)
+}
+
+// `myBooks` (optional) is the user's own book list, used only as a fuzzy
+// fallback when the exact normalized key doesn't match — e.g. one source has
+// the subtitle folded into the title and the other doesn't.
+function isInMyLibrary(book, myBookIds, myBookKeys, myBooks) {
   if (!book) return false
   if (myBookIds?.has(book.id)) return true
   const key = bookKey(book)
-  return key ? !!myBookKeys?.has(key) : false
+  if (key && myBookKeys?.has(key)) return true
+  if (myBooks?.length) {
+    const title = normalizeTitle(book.title)
+    const author = authorLastName(book.authors?.[0])
+    if (title) {
+      for (const mb of myBooks) {
+        if (authorLastName(mb?.authors?.[0]) !== author) continue
+        if (titlesAreClose(title, normalizeTitle(mb?.title))) return true
+      }
+    }
+  }
+  return false
 }
 
 async function upsertBook(book) {
@@ -2235,7 +2276,7 @@ function AuthPage({ inviteFrom, sharedBookId, sharedBy }) {
 // ================================================================
 // RecoCard – poster with WatchList-style hover quick-add circles
 // ================================================================
-function RecoCard({ book, userId, myBookIds, myBookKeys, onAdded, onDismiss, onOpenModal, caption }) {
+function RecoCard({ book, userId, myBookIds, myBookKeys, myBooks, onAdded, onDismiss, onOpenModal, caption }) {
   const isMobile = useIsMobile()
   const [hovered,  setHovered]  = useState(false)
   const [adding,   setAdding]   = useState(null)
@@ -2243,7 +2284,7 @@ function RecoCard({ book, userId, myBookIds, myBookKeys, onAdded, onDismiss, onO
   const [showRating, setShowRating] = useState(false)
   const hideTimerRef = useRef(null)
   useEffect(() => () => clearTimeout(hideTimerRef.current), [])
-  const inLibrary = isInMyLibrary(book, myBookIds, myBookKeys) || !!added
+  const inLibrary = isInMyLibrary(book, myBookIds, myBookKeys, myBooks) || !!added
 
   async function handleAdd(status) {
     setAdding(status)
@@ -2356,7 +2397,7 @@ function RecoCard({ book, userId, myBookIds, myBookKeys, onAdded, onDismiss, onO
 // ================================================================
 // FriendBookCard – a book on a friend's shelf, with quick-add if you don't have it
 // ================================================================
-function FriendBookCard({ ub, profile, userId, myBookIds, myBookKeys, onAdded, onOpenModal }) {
+function FriendBookCard({ ub, profile, userId, myBookIds, myBookKeys, myBooks, onAdded, onOpenModal }) {
   const isMobile = useIsMobile()
   const [hovered, setHovered] = useState(false)
   const [adding,  setAdding]  = useState(null)
@@ -2364,7 +2405,7 @@ function FriendBookCard({ ub, profile, userId, myBookIds, myBookKeys, onAdded, o
   const hideTimerRef = useRef(null)
   useEffect(() => () => clearTimeout(hideTimerRef.current), [])
   const book = ub.books || {}
-  const inLibrary = isInMyLibrary(book, myBookIds, myBookKeys) || !!added
+  const inLibrary = isInMyLibrary(book, myBookIds, myBookKeys, myBooks) || !!added
 
   async function handleAdd(status) {
     setAdding(status)
@@ -3038,6 +3079,7 @@ function DiscoverPage({ userId }) {
   const [loading,      setLoading]      = useState(true)
   const [myBookIds,    setMyBookIds]    = useState(new Set())
   const [myBookKeys,   setMyBookKeys]   = useState(new Set()) // normalized title|author fallback match
+  const [myBooks,      setMyBooks]      = useState([]) // fuzzy-title fallback match, for subtitle/formatting mismatches
   const [dismissedRecs, setDismissedRecs] = useState(new Set())
   const [modal,        setModal]        = useState(null)
   const [expanded,     setExpanded]     = useState(null) // null | 'friends' | 'recommended' | 'trending' | 'picks'
@@ -3066,7 +3108,7 @@ function DiscoverPage({ userId }) {
   // The four sources below are independent of each other, so they're fetched
   // concurrently and merged (in priority order) once all have resolved,
   // instead of awaiting one after another.
-  async function buildRecommended(lib, ids, keys, friendIds, localProfileMap) {
+  async function buildRecommended(lib, ids, keys, myBooksList, friendIds, localProfileMap) {
     const [fromFriendPool, highlyRatedPool, authorPool, genrePool] = await Promise.all([
       (async () => {
         const { data: recs } = await supabase.from('book_recommendations').select('*, books(*)')
@@ -3120,7 +3162,7 @@ function DiscoverPage({ userId }) {
     const recPool = []
     const seen = new Set()
     for (const b of [...fromFriendPool, ...highlyRatedPool, ...authorPool, ...genrePool]) {
-      if (!b?.id || seen.has(b.id) || isInMyLibrary(b, ids, keys)) continue
+      if (!b?.id || seen.has(b.id) || isInMyLibrary(b, ids, keys, myBooksList)) continue
       seen.add(b.id)
       recPool.push(b)
     }
@@ -3128,7 +3170,7 @@ function DiscoverPage({ userId }) {
   }
 
   // ── Trending: privacy-safe aggregate across all users (see schema_trending.sql) ──
-  async function buildTrending(ids, keys) {
+  async function buildTrending(ids, keys, myBooksList) {
     try {
       const { data: trend, error } = await supabase.rpc('get_trending_books', { days_back: 180, limit_count: 40 })
       if (!error && trend?.length) {
@@ -3136,7 +3178,7 @@ function DiscoverPage({ userId }) {
         const { data: trendBooks } = await supabase.from('books').select('*').in('id', bookIds)
         const bookMap = Object.fromEntries((trendBooks || []).map(b => [b.id, b]))
         const merged = trend.map(t => ({ ...bookMap[t.book_id], adds: t.adds }))
-          .filter(b => b.id && !isInMyLibrary(b, ids, keys))
+          .filter(b => b.id && !isInMyLibrary(b, ids, keys, myBooksList))
         if (merged.length > 0) {
           setTrending(merged)
           return
@@ -3149,13 +3191,13 @@ function DiscoverPage({ userId }) {
       // surface currently-popular new releases instead of leaving the section empty.
       try {
         const { results } = await searchBooks('new york times bestseller 2026', 20)
-        setTrending(results.filter(b => !isInMyLibrary(b, ids, keys)).map(b => ({ ...b, reason: 'Popular right now' })))
+        setTrending(results.filter(b => !isInMyLibrary(b, ids, keys, myBooksList)).map(b => ({ ...b, reason: 'Popular right now' })))
       } catch (_) { setTrending([]) }
     }
   }
 
   // ── Picks: curated stand-in lists (no NYT key needed — see PICKS_LISTS) ──
-  async function buildPicks(ids, keys) {
+  async function buildPicks(ids, keys, myBooksList) {
     try {
       const shuffledLists = [...PICKS_LISTS].sort(() => Math.random() - 0.5).slice(0, 2)
       // Both list searches run in parallel with each other
@@ -3166,7 +3208,7 @@ function DiscoverPage({ userId }) {
       const picksPool = []
       const seen = new Set()
       for (const b of perList.flat()) {
-        if (!b?.id || seen.has(b.id) || isInMyLibrary(b, ids, keys)) continue
+        if (!b?.id || seen.has(b.id) || isInMyLibrary(b, ids, keys, myBooksList)) continue
         seen.add(b.id)
         picksPool.push(b)
       }
@@ -3181,8 +3223,10 @@ function DiscoverPage({ userId }) {
     const lib = myLib || []
     const ids = new Set(lib.map(u => u.book_id))
     const keys = new Set(lib.map(u => bookKey(u.books)).filter(Boolean))
+    const booksList = lib.map(u => u.books).filter(Boolean)
     setMyBookIds(ids)
     setMyBookKeys(keys)
+    setMyBooks(booksList)
 
     // ── Friends' activity ──
     const { data: fships } = await supabase.from('friendships')
@@ -3211,9 +3255,9 @@ function DiscoverPage({ userId }) {
     // concurrently instead of chaining one after another. This is what used
     // to make Discover slow: up to ~6 sequential Google Books calls in a row.
     await Promise.all([
-      buildRecommended(lib, ids, keys, friendIds, localProfileMap),
-      buildTrending(ids, keys),
-      buildPicks(ids, keys),
+      buildRecommended(lib, ids, keys, booksList, friendIds, localProfileMap),
+      buildTrending(ids, keys, booksList),
+      buildPicks(ids, keys, booksList),
     ])
 
     setLoading(false)
@@ -3240,8 +3284,8 @@ function DiscoverPage({ userId }) {
     // Books already on your own shelf are pushed to the very end, so the row
     // leads with things you haven't seen yet — then highly-rated first, then
     // most recently updated.
-    const aOwned = isInMyLibrary(a.books, myBookIds, myBookKeys)
-    const bOwned = isInMyLibrary(b.books, myBookIds, myBookKeys)
+    const aOwned = isInMyLibrary(a.books, myBookIds, myBookKeys, myBooks)
+    const bOwned = isInMyLibrary(b.books, myBookIds, myBookKeys, myBooks)
     if (aOwned !== bOwned) return aOwned ? 1 : -1
     const aRating = a.rating || 0, bRating = b.rating || 0
     if (aRating !== bRating) return bRating - aRating
@@ -3297,7 +3341,7 @@ function DiscoverPage({ userId }) {
             items={friendsVisible} emptyMsg="Add friends to see what they're reading"
             renderItem={ub => (
               <FriendBookCard key={ub.id} ub={ub} profile={profileMap[ub.user_id]} userId={userId}
-                myBookIds={myBookIds} myBookKeys={myBookKeys} onAdded={markAdded}
+                myBookIds={myBookIds} myBookKeys={myBookKeys} myBooks={myBooks} onAdded={markAdded}
                 onOpenModal={() => setModal({ book: ub.books })} />
             )} />
         </div>
@@ -3317,7 +3361,7 @@ function DiscoverPage({ userId }) {
           <DiscoverSectionBody expanded={expanded === 'recommended'} loading={loading}
             items={recVisible} emptyMsg="Recommendations will show up here as you use the app"
             renderItem={book => (
-              <RecoCard key={book.id} book={book} userId={userId} myBookIds={myBookIds} myBookKeys={myBookKeys}
+              <RecoCard key={book.id} book={book} userId={userId} myBookIds={myBookIds} myBookKeys={myBookKeys} myBooks={myBooks}
                 onAdded={(id, b) => { markAdded(id, b); loadDiscoverData() }}
                 onDismiss={id => setDismissedRecs(prev => new Set([...prev, id]))}
                 onOpenModal={() => setModal({ book })} caption={book.reason} />
@@ -3337,7 +3381,7 @@ function DiscoverPage({ userId }) {
           <DiscoverSectionBody expanded={expanded === 'trending'} loading={loading}
             items={trendVisible} emptyMsg="Nothing trending right now."
             renderItem={book => (
-              <RecoCard key={book.id} book={book} userId={userId} myBookIds={myBookIds} myBookKeys={myBookKeys}
+              <RecoCard key={book.id} book={book} userId={userId} myBookIds={myBookIds} myBookKeys={myBookKeys} myBooks={myBooks}
                 onAdded={(id, b) => { markAdded(id, b); loadDiscoverData() }}
                 onDismiss={id => setDismissedRecs(prev => new Set([...prev, id]))}
                 onOpenModal={() => setModal({ book })}
@@ -3360,7 +3404,7 @@ function DiscoverPage({ userId }) {
           <DiscoverSectionBody expanded={expanded === 'picks'} loading={loading}
             items={picksVisible} emptyMsg="Loading picks…"
             renderItem={book => (
-              <RecoCard key={book.id} book={book} userId={userId} myBookIds={myBookIds} myBookKeys={myBookKeys}
+              <RecoCard key={book.id} book={book} userId={userId} myBookIds={myBookIds} myBookKeys={myBookKeys} myBooks={myBooks}
                 onAdded={(id, b) => { markAdded(id, b); loadDiscoverData() }}
                 onDismiss={id => setDismissedRecs(prev => new Set([...prev, id]))}
                 onOpenModal={() => setModal({ book })} caption={book.reason} />
