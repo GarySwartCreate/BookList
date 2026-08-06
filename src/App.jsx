@@ -4035,12 +4035,26 @@ function FriendsPage({ userId }) {
     setOutgoing(pend.filter(f => f.requester_id === userId).map(f => ({ ...f, addresseeProfile: pm[f.addressee_id] })))
     setLoading(false)
 
-    // Friends' shelf — aggregated books across all accepted friends
+    // Friends' shelf — aggregated books across all accepted friends.
+    // Was capped at .limit(100) across ALL friends combined, so a single friend
+    // with a large library (e.g. 248 Read alone) could silently crowd out most
+    // of everyone else's books — the "100" was just the query cap, not a real
+    // total. Paginate in batches of 1000 (Supabase's per-request row cap) until
+    // everything is fetched, so the count here actually reflects every book.
     if (accepted.length > 0) {
       const friendIds = accepted.map(f => f.requester_id === userId ? f.addressee_id : f.requester_id)
-      const { data: fBooks } = await supabase.from('user_books').select('*, books(*)')
-        .in('user_id', friendIds).order('updated_at', { ascending: false }).limit(100)
-      setFriendBooks(fBooks || [])
+      let fBooks = []
+      let from = 0
+      const PAGE = 1000
+      while (true) {
+        const { data: page } = await supabase.from('user_books').select('*, books(*)')
+          .in('user_id', friendIds).order('updated_at', { ascending: false })
+          .range(from, from + PAGE - 1)
+        fBooks = fBooks.concat(page || [])
+        if (!page || page.length < PAGE) break
+        from += PAGE
+      }
+      setFriendBooks(fBooks)
 
       // Taste-match % — pull each friend's full shelf (lightweight, genres only) and
       // compare against mine via genre-overlap + shared-books.
