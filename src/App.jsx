@@ -2395,13 +2395,24 @@ function AddBookModal({ userId, defaultStatus = null, onClose, onAdded, onOpenMo
           }}>×</button>
         </div>
 
-        <input
-          autoFocus
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          placeholder="🔍  Search by title, author, or ISBN…"
-          style={{ ...inputStyle, marginBottom: 14, flexShrink: 0 }}
-        />
+        <div style={{ position: 'relative', marginBottom: 14, flexShrink: 0 }}>
+          <input
+            autoFocus
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="🔍  Search by title, author, or ISBN…"
+            style={{ ...inputStyle, paddingRight: query ? 34 : undefined }}
+          />
+          {query && (
+            <button onClick={() => setQuery('')} title="Clear search" style={{
+              position: 'absolute', top: '50%', right: 8, transform: 'translateY(-50%)',
+              width: 22, height: 22, borderRadius: '50%', border: 'none',
+              background: C.surface2, color: C.muted, cursor: 'pointer',
+              fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              WebkitTapHighlightColor: 'transparent',
+            }}>×</button>
+          )}
+        </div>
 
         <div style={{ overflowY: 'auto' }}>
           {searching ? <Spinner /> : err ? (
@@ -2500,7 +2511,7 @@ function HomePage({ userId, onOpenList }) {
   const [myBooks,      setMyBooks]      = useState([])
   const [loadingData,  setLoadingData]  = useState(true)
   const [modal,        setModal]        = useState(null)
-  const [showAdd,      setShowAdd]      = useState(null) // null | 'reading' | 'want_to_read'
+  const [showAdd,      setShowAdd]      = useState(null) // null | 'reading' | 'want_to_read' | 'read'
   const [showReadFilter, setShowReadFilter] = useState(false)
   const [readSort,     setReadSort]     = useState('default')
   const [readGenre,    setReadGenre]    = useState('all')
@@ -2654,23 +2665,19 @@ function HomePage({ userId, onOpenList }) {
           </div>
         )}
 
-        {loadingData ? <Spinner /> : read.length === 0
-          ? <p style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, fontStyle: 'italic', margin: 0 }}>
-              Books you finish will show up here
-            </p>
-          : (
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
-              gap: isMobile ? 9 : 16,
-            }}>
-              {read.map(ub => (
-                <PosterCard key={ub.id} userBook={ub}
-                  onClick={() => setModal({ type: 'library', userBook: ub })} />
-              ))}
-            </div>
-          )
-        }
+        {loadingData ? <Spinner /> : (
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
+            gap: isMobile ? 9 : 16,
+          }}>
+            <AddTile onClick={() => setShowAdd('read')} label="Add Book" />
+            {read.map(ub => (
+              <PosterCard key={ub.id} userBook={ub}
+                onClick={() => setModal({ type: 'library', userBook: ub })} />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Detail modal */}
