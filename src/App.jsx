@@ -954,8 +954,8 @@ function Accordion({ icon, title, defaultOpen = false, children }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
     <div style={{
-      background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10,
-      marginBottom: 12, overflow: 'hidden',
+      background: C.surface, borderRadius: 10,
+      marginBottom: 10, overflow: 'hidden',
     }}>
       <button onClick={() => setOpen(o => !o)} style={{
         width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -986,7 +986,7 @@ function HorizontalRow({ title, icon, iconBg, items, renderItem, emptyMsg, loadi
   const isMobile = useIsMobile()
   const Header = seeAllAction ? 'button' : 'div'
   return (
-    <div style={{ marginBottom: 36 }}>
+    <div style={{ marginBottom: 22 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 10, flexWrap: 'wrap' }}>
         <Header onClick={seeAllAction} style={{
           display: 'flex', alignItems: 'center', gap: 10,
@@ -2359,7 +2359,6 @@ function RecoCard({ book, userId, myBookIds, myBookKeys, myBooks, onAdded, onDis
                 { st: 'reading',      icon: STATUS_ICONS.reading,      bg: STATUS_COLORS.reading.color,      fg: '#0f1117', label: 'Reading',      dismiss: false },
                 { st: 'want_to_read', icon: STATUS_ICONS.want_to_read, bg: STATUS_COLORS.want_to_read.color, fg: '#0f1117', label: 'Want to Read', dismiss: false },
                 { st: 'read',         icon: STATUS_ICONS.read,         bg: STATUS_COLORS.read.color,         fg: '#0f1117', label: 'Read',         dismiss: false },
-                { st: 'not_for_me',   icon: '✕',  bg: '#3d1f1f',  fg: '#ff7070', label: 'Not for Me',    dismiss: true  },
               ].map(({ st, icon, bg, fg, label, dismiss }) => (
                 <button key={st}
                   onClick={(e) => { e.stopPropagation(); dismiss ? handleDismiss() : handleAdd(st) }}
@@ -2384,7 +2383,7 @@ function RecoCard({ book, userId, myBookIds, myBookKeys, myBooks, onAdded, onDis
           )}
         </div>
       )}
-      {caption && (
+      {caption && hovered && (
         <p style={{
           margin: '6px 0 0', fontSize: 11, color: C.muted, fontFamily: f.sans,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120,
@@ -2777,7 +2776,7 @@ function HomePage({ userId, onOpenList }) {
       )}
 
       {/* Read — expands as a full grid, not a single scrolling row */}
-      <div style={{ marginBottom: 36 }}>
+      <div style={{ marginBottom: 22 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 10, flexWrap: 'wrap' }}>
           <button onClick={goToList('read', true)} style={{
             display: 'flex', alignItems: 'center', gap: 10,
@@ -3327,7 +3326,7 @@ function DiscoverPage({ userId }) {
       )}
 
       {(!expanded || expanded === 'friends') && (
-        <div style={{ marginBottom: 36 }}>
+        <div style={{ marginBottom: 22 }}>
           <DiscoverSectionHeader icon="🍿" iconBg={C.primary} title="Friends" count={friendsVisible.length}
             onTitleClick={() => setExpanded(expanded === 'friends' ? null : 'friends')}
             filterOpen={showFriendsFilter} onFilterToggle={() => setShowFriendsFilter(o => !o)}
@@ -3348,7 +3347,7 @@ function DiscoverPage({ userId }) {
       )}
 
       {(!expanded || expanded === 'recommended') && (
-        <div style={{ marginBottom: 36 }}>
+        <div style={{ marginBottom: 22 }}>
           <DiscoverSectionHeader icon="✨" iconBg={C.accent} title="Recommended" count={recVisible.length}
             onTitleClick={() => setExpanded(expanded === 'recommended' ? null : 'recommended')}
             filterOpen={showRecFilter} onFilterToggle={() => setShowRecFilter(o => !o)}
@@ -3370,7 +3369,7 @@ function DiscoverPage({ userId }) {
       )}
 
       {(!expanded || expanded === 'trending') && (
-        <div style={{ marginBottom: 36 }}>
+        <div style={{ marginBottom: 22 }}>
           <DiscoverSectionHeader icon="🔥" iconBg={C.danger} title="Trending" count={trendVisible.length}
             onTitleClick={() => setExpanded(expanded === 'trending' ? null : 'trending')}
             filterOpen={showTrendFilter} onFilterToggle={() => setShowTrendFilter(o => !o)}
@@ -3391,7 +3390,7 @@ function DiscoverPage({ userId }) {
       )}
 
       {(!expanded || expanded === 'picks') && (
-        <div style={{ marginBottom: 36 }}>
+        <div style={{ marginBottom: 22 }}>
           <DiscoverSectionHeader icon="⭐" iconBg={C.accent} title="Picks" count={picksVisible.length}
             onTitleClick={() => setExpanded(expanded === 'picks' ? null : 'picks')}
             filterOpen={showPicksFilter} onFilterToggle={() => setShowPicksFilter(o => !o)}
@@ -3807,7 +3806,7 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
           seeAllAction={() => setExpandReading(true)}
         />
       ) : (
-        <div style={{ marginBottom: 36 }}>
+        <div style={{ marginBottom: 22 }}>
           <button onClick={() => setExpandReading(false)} style={{
             display: 'flex', alignItems: 'center', gap: 10, background: 'none', border: 'none',
             padding: 0, margin: '0 0 14px', cursor: 'pointer', fontFamily: f.sans,
@@ -3846,7 +3845,7 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
           seeAllAction={() => setExpandWantToRead(true)}
         />
       ) : (
-        <div style={{ marginBottom: 36 }}>
+        <div style={{ marginBottom: 22 }}>
           <button onClick={() => setExpandWantToRead(false)} style={{
             display: 'flex', alignItems: 'center', gap: 10, background: 'none', border: 'none',
             padding: 0, margin: '0 0 14px', cursor: 'pointer', fontFamily: f.sans,
@@ -3886,7 +3885,7 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
           seeAllAction={() => setExpandRead(true)}
         />
       ) : (
-        <div style={{ marginBottom: 36 }}>
+        <div style={{ marginBottom: 22 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 10, flexWrap: 'wrap' }}>
             <button onClick={() => setExpandRead(false)} style={{
               display: 'flex', alignItems: 'center', gap: 10, background: 'none', border: 'none',
@@ -4920,7 +4919,7 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
           <div style={{
             display: 'grid',
             gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
-            gap: isMobile ? 9 : 16, marginBottom: 36,
+            gap: isMobile ? 9 : 16, marginBottom: 22,
           }}>
             {visibleBooks.map(ub => (
               <PosterCard key={ub.id} userBook={ub} onClick={() => setModal(ub)} />
@@ -4931,7 +4930,7 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
 
       {/* Top 10 favorites */}
       {topBooks.length > 0 && (
-        <div style={{ marginBottom: 36 }}>
+        <div style={{ marginBottom: 22 }}>
           <p style={{ margin: '0 0 14px', fontSize: 11, color: C.muted, fontFamily: f.sans,
             textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>⭐ My Top {topBooks.length} Books</p>
           <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 8, scrollbarWidth: 'none' }}>
@@ -4949,7 +4948,7 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
 
       {/* Author follows */}
       {follows.length > 0 && (
-        <div style={{ marginBottom: 36 }}>
+        <div style={{ marginBottom: 22 }}>
           <p style={{ margin: '0 0 14px', fontSize: 11, color: C.muted, fontFamily: f.sans,
             textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Authors You Follow</p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
