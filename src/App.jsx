@@ -3066,7 +3066,7 @@ function DiscoverPage({ userId }) {
   // The four sources below are independent of each other, so they're fetched
   // concurrently and merged (in priority order) once all have resolved,
   // instead of awaiting one after another.
-  async function buildRecommended(lib, ids, friendIds, localProfileMap) {
+  async function buildRecommended(lib, ids, keys, friendIds, localProfileMap) {
     const [fromFriendPool, highlyRatedPool, authorPool, genrePool] = await Promise.all([
       (async () => {
         const { data: recs } = await supabase.from('book_recommendations').select('*, books(*)')
@@ -3120,7 +3120,7 @@ function DiscoverPage({ userId }) {
     const recPool = []
     const seen = new Set()
     for (const b of [...fromFriendPool, ...highlyRatedPool, ...authorPool, ...genrePool]) {
-      if (!b?.id || ids.has(b.id) || seen.has(b.id)) continue
+      if (!b?.id || seen.has(b.id) || isInMyLibrary(b, ids, keys)) continue
       seen.add(b.id)
       recPool.push(b)
     }
@@ -3128,7 +3128,7 @@ function DiscoverPage({ userId }) {
   }
 
   // ── Trending: privacy-safe aggregate across all users (see schema_trending.sql) ──
-  async function buildTrending(ids) {
+  async function buildTrending(ids, keys) {
     try {
       const { data: trend, error } = await supabase.rpc('get_trending_books', { days_back: 180, limit_count: 40 })
       if (!error && trend?.length) {
@@ -3136,7 +3136,7 @@ function DiscoverPage({ userId }) {
         const { data: trendBooks } = await supabase.from('books').select('*').in('id', bookIds)
         const bookMap = Object.fromEntries((trendBooks || []).map(b => [b.id, b]))
         const merged = trend.map(t => ({ ...bookMap[t.book_id], adds: t.adds }))
-          .filter(b => b.id && !ids.has(b.id))
+          .filter(b => b.id && !isInMyLibrary(b, ids, keys))
         if (merged.length > 0) {
           setTrending(merged)
           return
@@ -3149,13 +3149,13 @@ function DiscoverPage({ userId }) {
       // surface currently-popular new releases instead of leaving the section empty.
       try {
         const { results } = await searchBooks('new york times bestseller 2026', 20)
-        setTrending(results.filter(b => !ids.has(b.id)).map(b => ({ ...b, reason: 'Popular right now' })))
+        setTrending(results.filter(b => !isInMyLibrary(b, ids, keys)).map(b => ({ ...b, reason: 'Popular right now' })))
       } catch (_) { setTrending([]) }
     }
   }
 
   // ── Picks: curated stand-in lists (no NYT key needed — see PICKS_LISTS) ──
-  async function buildPicks(ids) {
+  async function buildPicks(ids, keys) {
     try {
       const shuffledLists = [...PICKS_LISTS].sort(() => Math.random() - 0.5).slice(0, 2)
       // Both list searches run in parallel with each other
@@ -3166,7 +3166,7 @@ function DiscoverPage({ userId }) {
       const picksPool = []
       const seen = new Set()
       for (const b of perList.flat()) {
-        if (!b?.id || ids.has(b.id) || seen.has(b.id)) continue
+        if (!b?.id || seen.has(b.id) || isInMyLibrary(b, ids, keys)) continue
         seen.add(b.id)
         picksPool.push(b)
       }
@@ -3180,8 +3180,9 @@ function DiscoverPage({ userId }) {
     const { data: myLib } = await supabase.from('user_books').select('*, books(*)').eq('user_id', userId)
     const lib = myLib || []
     const ids = new Set(lib.map(u => u.book_id))
+    const keys = new Set(lib.map(u => bookKey(u.books)).filter(Boolean))
     setMyBookIds(ids)
-    setMyBookKeys(new Set(lib.map(u => bookKey(u.books)).filter(Boolean)))
+    setMyBookKeys(keys)
 
     // ── Friends' activity ──
     const { data: fships } = await supabase.from('friendships')
@@ -3210,9 +3211,9 @@ function DiscoverPage({ userId }) {
     // concurrently instead of chaining one after another. This is what used
     // to make Discover slow: up to ~6 sequential Google Books calls in a row.
     await Promise.all([
-      buildRecommended(lib, ids, friendIds, localProfileMap),
-      buildTrending(ids),
-      buildPicks(ids),
+      buildRecommended(lib, ids, keys, friendIds, localProfileMap),
+      buildTrending(ids, keys),
+      buildPicks(ids, keys),
     ])
 
     setLoading(false)
@@ -4417,11 +4418,6 @@ function FriendsPage({ userId }) {
                       </div>
                     </div>
                   )}
-
-                  <p style={{ margin: '4px 0 0', fontSize: 10, color: C.muted, fontFamily: f.sans,
-                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {profileMap[ub.user_id]?.display_name || profileMap[ub.user_id]?.username || ''}
-                  </p>
                 </div>
               )
             })}
