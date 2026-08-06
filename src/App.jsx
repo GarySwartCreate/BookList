@@ -692,7 +692,7 @@ function PosterCard({ book, userBook, onClick, width, height, quickActions }) {
 
   return (
     <div
-      role="button"
+      className="poster-card"
       tabIndex={0}
       onClick={onClick}
       onTouchStart={onTouchStart}
@@ -883,10 +883,20 @@ function AddTile({ onClick, label = 'Add', width, height }) {
 
 function SectionBadge({ icon, bg, title }) {
   const [show, setShow] = useState(false)
+  const hideTimerRef = useRef(null)
+  useEffect(() => () => clearTimeout(hideTimerRef.current), [])
   return (
     <span
       onMouseEnter={() => title && setShow(true)}
       onMouseLeave={() => setShow(false)}
+      onClick={(e) => {
+        if (!title) return
+        e.stopPropagation()
+        e.preventDefault()
+        setShow(true)
+        clearTimeout(hideTimerRef.current)
+        hideTimerRef.current = setTimeout(() => setShow(false), 3000)
+      }}
       style={{
         position: 'relative',
         width: 26, height: 26, borderRadius: '50%', background: bg || C.primary,
@@ -982,7 +992,7 @@ function Accordion({ icon, title, defaultOpen = false, children }) {
 // ================================================================
 // HorizontalRow – scrollable shelf row
 // ================================================================
-function HorizontalRow({ title, icon, iconBg, items, renderItem, emptyMsg, loading, seeAllAction, onAdd, addLabel = 'Add', rightAction, belowHeader }) {
+function HorizontalRow({ title, icon, iconBg, tooltip, items, renderItem, emptyMsg, loading, seeAllAction, onAdd, addLabel = 'Add', rightAction, belowHeader }) {
   const isMobile = useIsMobile()
   const Header = seeAllAction ? 'button' : 'div'
   return (
@@ -993,7 +1003,7 @@ function HorizontalRow({ title, icon, iconBg, items, renderItem, emptyMsg, loadi
           background: 'none', border: 'none', padding: 0, margin: 0,
           cursor: seeAllAction ? 'pointer' : 'default', fontFamily: f.sans,
         }}>
-          {icon && <SectionBadge icon={icon} bg={iconBg} />}
+          {icon && <SectionBadge icon={icon} bg={iconBg} title={tooltip} />}
           <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontWeight: 700, fontFamily: f.sans }}>
             {title}
           </h2>
@@ -2327,7 +2337,7 @@ function RecoCard({ book, userId, myBookIds, myBookKeys, myBooks, onAdded, onDis
   }
 
   return (
-    <div style={{ flexShrink: 0, position: 'relative' }}
+    <div className={`disco-tile${hovered ? ' disco-tapped' : ''}`} style={{ flexShrink: 0, position: 'relative' }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}>
       {showRating && (
@@ -2383,8 +2393,8 @@ function RecoCard({ book, userId, myBookIds, myBookKeys, myBooks, onAdded, onDis
           )}
         </div>
       )}
-      {caption && hovered && (
-        <p style={{
+      {caption && (
+        <p className="disco-caption" style={{
           margin: '6px 0 0', fontSize: 11, color: C.muted, fontFamily: f.sans,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120,
         }}>{caption}</p>
@@ -2741,6 +2751,7 @@ function HomePage({ userId, onOpenList }) {
         title="Want to Read"
         icon="👀"
         iconBg={C.accent}
+        tooltip="⠿ Drag the grip in the corner of a cover to set your priority order"
         items={wantToRead}
         renderItem={(ub, idx) => (
           <div key={ub.id}
@@ -2769,12 +2780,6 @@ function HomePage({ userId, onOpenList }) {
         addLabel="Add Book"
         seeAllAction={goToList('want_to_read', true)}
       />
-      {wantToRead.length > 1 && (
-        <p style={{ margin: '-30px 0 20px', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
-          ⠿ Drag the grip in the corner of a cover to set your priority order
-        </p>
-      )}
-
       {/* Read — expands as a full grid, not a single scrolling row */}
       <div style={{ marginBottom: 22 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 10, flexWrap: 'wrap' }}>
@@ -4331,9 +4336,6 @@ function FriendsPage({ userId }) {
                   <div>
                     <p style={{ margin: 0, fontWeight: 700, fontSize: 14, color: C.text, fontFamily: f.sans }}>
                       {f.friendProfile?.display_name || f.friendProfile?.username || 'Unknown'}
-                    </p>
-                    <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans }}>
-                      @{f.friendProfile?.username}
                     </p>
                   </div>
                 </div>

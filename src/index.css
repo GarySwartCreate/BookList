@@ -56,7 +56,17 @@ select, textarea, input {
   button { touch-action: manipulation; }
   /* Ensure tap areas are large enough */
   button, [role="button"] { min-height: 36px; }
+  /* Poster tiles are tabbable divs; some mobile browsers still apply a
+     persistent focus outline on tap, which reads as a stray blue box
+     around covers. Keyboard focus still gets the ring on desktop. */
+  .poster-card:focus,
+  .poster-card:focus-visible { outline: none; }
 }
+
+/* Discover tile captions — reveal on hover (desktop) or on tap (mobile, via .disco-tapped) */
+.disco-caption { opacity: 0; transition: opacity 0.15s ease; }
+.disco-tile:hover .disco-caption,
+.disco-tile.disco-tapped .disco-caption { opacity: 1; }
 
 /* Remove autofill yellow */
 input:-webkit-autofill {
