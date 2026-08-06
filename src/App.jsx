@@ -1299,14 +1299,15 @@ function FinishedReadingPopup({ title, initialRating, shareFriends, sentTo, link
 // BookDetailModal – full info overlay
 // ================================================================
 // WatchList-style action box: icon + label, optional badge, used in BookDetailModal
-function ActionBox({ icon, label, badge, sub, active, danger, onClick }) {
+function ActionBox({ icon, label, badge, sub, active, activeColor, danger, onClick }) {
+  const accentColor = activeColor || C.primary
   return (
     <button onClick={onClick} style={{
       flex: 1, minWidth: 60, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
       padding: '10px 4px', borderRadius: 10, cursor: 'pointer', position: 'relative',
-      background: active ? `${C.primary}22` : C.surface2,
-      border: `1px solid ${danger ? C.danger : active ? C.primary : C.border}`,
-      color: danger ? C.danger : active ? C.primary : C.text,
+      background: active ? `${accentColor}22` : C.surface2,
+      border: `1px solid ${danger ? C.danger : active ? accentColor : C.border}`,
+      color: danger ? C.danger : active ? accentColor : C.text,
       fontFamily: f.sans, WebkitTapHighlightColor: 'transparent',
     }}>
       {badge != null && (
@@ -1317,7 +1318,10 @@ function ActionBox({ icon, label, badge, sub, active, danger, onClick }) {
         }}>{badge}</span>
       )}
       <span style={{ fontSize: 17 }}>{icon}</span>
-      <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+      <span style={{
+        fontSize: 10, fontWeight: active ? 800 : 700, textTransform: 'uppercase', letterSpacing: '0.04em',
+        color: active ? accentColor : undefined,
+      }}>{label}</span>
       {sub && <span style={{ display: 'flex', alignItems: 'center', gap: 3, lineHeight: 1 }}>{sub}</span>}
     </button>
   )
@@ -1599,7 +1603,7 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
     }
     // Check current Top 10 count
     const { data: currentTop10 } = await supabase.from('user_books')
-      .select('id, books(title, cover_url)')
+      .select('id, rating, books(title, cover_url)')
       .eq('user_id', userId).eq('top_10', true)
     if ((currentTop10 || []).length >= 10) {
       setExistingTop10(currentTop10 || [])
@@ -1754,11 +1758,20 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
                   ? <img src={ub.books.cover_url} alt="" style={{ width: 36, height: 54, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />
                   : <div style={{ width: 36, height: 54, background: C.border, borderRadius: 4, flexShrink: 0 }} />
                 }
-                <span style={{ color: C.text, fontFamily: f.sans, fontSize: 14, fontWeight: 600 }}>
-                  {ub.books?.title}
-                </span>
-                <span style={{ marginLeft: 'auto', fontSize: 11, color: C.danger, fontFamily: f.sans, flexShrink: 0 }}>
-                  Remove ×
+                <div style={{ minWidth: 0 }}>
+                  <p style={{ margin: '0 0 3px', color: C.text, fontFamily: f.sans, fontSize: 14, fontWeight: 600,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {ub.books?.title}
+                  </p>
+                  {ub.rating > 0 && (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <StarRating value={ub.rating} readonly size={11} />
+                      <span style={{ fontSize: 11, color: C.muted, fontFamily: f.sans, fontWeight: 700 }}>{ub.rating}/5</span>
+                    </span>
+                  )}
+                </div>
+                <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 700, color: C.danger, fontFamily: f.sans, flexShrink: 0 }}>
+                  Replace
                 </span>
               </button>
             ))}
@@ -1924,7 +1937,7 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
           <ActionBox icon="↗" label="Share"
             active={showSharePanel} onClick={() => setShowSharePanel(o => !o)} />
           <ActionBox icon={top10 ? '🏆' : '⭐'} label={top10 ? 'Faved' : 'Fave'}
-            active={top10} onClick={handleToggleTop10} />
+            active={top10} activeColor={C.accent} onClick={handleToggleTop10} />
           <ActionBox icon="🗑" label="Remove" danger onClick={handleRemove} />
         </div>
 
@@ -3480,10 +3493,12 @@ function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack
     read:         userBooks.filter(u => u.status === 'read').length,
     want_to_read: userBooks.filter(u => u.status === 'want_to_read').length,
     rated:        userBooks.filter(u => (u.rating || 0) > 0).length,
+    favorites:    userBooks.filter(u => u.top_10).length,
   }
 
   const baseFiltered = filter === 'all' ? userBooks
     : filter === 'rated' ? userBooks.filter(u => (u.rating || 0) > 0)
+    : filter === 'favorites' ? userBooks.filter(u => u.top_10)
     : userBooks.filter(u => u.status === filter)
   const matched = baseFiltered
   const isQueue = filter === 'want_to_read'
@@ -3541,6 +3556,7 @@ function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack
                       ['reading', '▶ Reading', counts.reading],
                       ['read', '✅ Read', counts.read],
                       ['want_to_read', '👀 Want to Read', counts.want_to_read],
+                      ['favorites', '🏆 Favorites', counts.favorites],
                     ].map(([key, lbl, count]) => (
                       <button key={key} onClick={() => setFilter(key)} style={pill(filter === key)}>
                         {lbl}
@@ -4058,6 +4074,7 @@ const FRIEND_STATUS_FILTERS = [
   ['reading',      '▶ Reading'],
   ['want_to_read', '👀 Want to Read'],
   ['highly_rated', '⭐ Highly Rated'],
+  ['favorites',    '🏆 Favorites'],
   ['recent',       '🕐 Recent'],
 ]
 
@@ -4205,6 +4222,7 @@ function FriendsPage({ userId }) {
   const shelfVisible = friendBooks.filter(ub => {
     if (statusFilter === 'all') return true
     if (statusFilter === 'highly_rated') return (ub.rating || 0) >= 4
+    if (statusFilter === 'favorites') return !!ub.top_10
     if (statusFilter === 'recent') return true // already sorted by updated_at desc
     return ub.status === statusFilter
   }).sort((a, b) => {
