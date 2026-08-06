@@ -1912,6 +1912,71 @@ function autoAvatar(email) {
   return LITERARY_EMOJIS[sum % LITERARY_EMOJIS.length]
 }
 
+// ================================================================
+// ResetPasswordPage – shown after clicking the "reset password" email link
+// ================================================================
+function ResetPasswordPage({ onDone }) {
+  const [newPassword,     setNewPassword]     = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [msg,    setMsg]    = useState(null)
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    if (newPassword.length < 8) { setMsg({ type: 'error', text: 'Password must be at least 8 characters.' }); return }
+    if (newPassword !== confirmPassword) { setMsg({ type: 'error', text: 'Passwords do not match.' }); return }
+    setSaving(true); setMsg(null)
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword })
+      if (error) throw error
+      setMsg({ type: 'success', text: 'Password updated! Taking you in…' })
+      setTimeout(() => onDone(), 1200)
+    } catch (err) {
+      setMsg({ type: 'error', text: err.message })
+    }
+    setSaving(false)
+  }
+
+  return (
+    <div style={{ minHeight: '100vh', background: C.bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{
+        width: '100%', maxWidth: 380, background: C.surface, borderRadius: 14,
+        padding: 'clamp(20px, 5vw, 36px)', border: `1px solid ${C.border}`,
+        boxShadow: '0 20px 60px rgba(0,0,0,0.5)', margin: '0 12px',
+      }}>
+        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+          <div style={{ fontSize: 40, marginBottom: 8 }}>🔑</div>
+          <h1 style={{ margin: '0 0 4px', color: C.text, fontSize: 22, fontFamily: f.serif, fontWeight: 700 }}>
+            Set a New Password
+          </h1>
+          <p style={{ margin: 0, color: C.muted, fontSize: 13, fontFamily: f.sans }}>
+            Choose a new password for your account.
+          </p>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <input style={{ ...inputStyle, marginBottom: 10 }} type="password" value={newPassword}
+            onChange={e => setNewPassword(e.target.value)}
+            placeholder="New password (min. 8 characters)" required />
+          <input style={{ ...inputStyle, marginBottom: 18 }} type="password" value={confirmPassword}
+            onChange={e => setConfirmPassword(e.target.value)}
+            placeholder="Confirm new password" required />
+          {msg && (
+            <p style={{ margin: '0 0 14px', fontSize: 13, fontFamily: f.sans,
+              color: msg.type === 'success' ? C.success : C.danger,
+              background: msg.type === 'success' ? 'rgba(52,211,153,0.1)' : 'rgba(248,113,113,0.1)',
+              padding: '8px 12px', borderRadius: 6,
+            }}>{msg.text}</p>
+          )}
+          <button type="submit" disabled={saving}
+            style={{ ...btn('primary', 'lg'), width: '100%', justifyContent: 'center' }}>
+            {saving ? 'Saving…' : 'Save New Password'}
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 function AuthPage({ inviteFrom, sharedBookId, sharedBy }) {
   const [mode, setMode] = useState((inviteFrom || sharedBookId) ? 'signup' : 'signin')
   const [email, setEmail]           = useState('')
@@ -1923,6 +1988,7 @@ function AuthPage({ inviteFrom, sharedBookId, sharedBy }) {
   const [msg, setMsg]               = useState(null)
   const [sharedBook,       setSharedBook]       = useState(null)
   const [sharedByProfile,  setSharedByProfile]  = useState(null)
+  const [resetLoading,     setResetLoading]     = useState(false)
 
   // Someone sent a "share a link" invite for a specific book — preview it
   // (books + profiles are both publicly readable, so this works pre-login)
@@ -1969,6 +2035,21 @@ function AuthPage({ inviteFrom, sharedBookId, sharedBy }) {
       setMsg({ type: 'error', text: err.message })
     }
     setLoading(false)
+  }
+
+  async function handleForgotPassword() {
+    if (!email.trim()) { setMsg({ type: 'error', text: 'Enter your email above first.' }); return }
+    setResetLoading(true); setMsg(null)
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin + window.location.pathname,
+      })
+      if (error) throw error
+      setMsg({ type: 'success', text: 'Check your email for a link to reset your password. ✉️' })
+    } catch (err) {
+      setMsg({ type: 'error', text: err.message })
+    }
+    setResetLoading(false)
   }
 
   const tabBtn = (m, lbl) => (
@@ -2075,11 +2156,22 @@ function AuthPage({ inviteFrom, sharedBookId, sharedBy }) {
           </div>
 
           {mode !== 'magic' && (
-            <div style={{ marginBottom: 24 }}>
+            <div style={{ marginBottom: mode === 'signin' ? 8 : 24 }}>
               <label style={{ display: 'block', fontSize: 11, color: C.muted, marginBottom: 4, fontFamily: f.sans, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>Password</label>
               <input style={inputStyle} type="password" value={password}
                 onChange={e => setPassword(e.target.value)}
                 placeholder="••••••••" minLength={mode === 'signup' ? 8 : undefined} required />
+            </div>
+          )}
+
+          {mode === 'signin' && (
+            <div style={{ textAlign: 'right', marginBottom: 20 }}>
+              <button type="button" onClick={handleForgotPassword} disabled={resetLoading} style={{
+                background: 'none', border: 'none', color: C.primary, cursor: 'pointer',
+                fontFamily: f.sans, fontSize: 12, padding: 0,
+              }}>
+                {resetLoading ? 'Sending…' : 'Forgot password?'}
+              </button>
             </div>
           )}
           {mode === 'magic' && <div style={{ marginBottom: 24 }} />}
@@ -4409,6 +4501,27 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
   const [showBookFilter,   setShowBookFilter]   = useState(false)
   const [bookSort,   setBookSort]   = useState('default')
   const [bookStatus, setBookStatus] = useState('all')
+  const [showPasswordChange, setShowPasswordChange] = useState(false)
+  const [newPassword,     setNewPassword]     = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [pwSaving, setPwSaving] = useState(false)
+  const [pwMsg,    setPwMsg]    = useState(null)
+
+  async function changePassword() {
+    if (newPassword.length < 8) { setPwMsg({ type: 'error', text: 'Password must be at least 8 characters.' }); return }
+    if (newPassword !== confirmPassword) { setPwMsg({ type: 'error', text: 'Passwords do not match.' }); return }
+    setPwSaving(true); setPwMsg(null)
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword })
+      if (error) throw error
+      setPwMsg({ type: 'success', text: 'Password updated!' })
+      setNewPassword(''); setConfirmPassword('')
+      setTimeout(() => { setShowPasswordChange(false); setPwMsg(null) }, 1800)
+    } catch (err) {
+      setPwMsg({ type: 'error', text: err.message })
+    }
+    setPwSaving(false)
+  }
 
   // Keep local fields in sync if profile prop refreshes from elsewhere
   useEffect(() => {
@@ -4576,6 +4689,31 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
           <SettingsRow label="Account">
             <span style={{ color: C.muted, fontFamily: f.sans, fontSize: 13 }}>{email}</span>
           </SettingsRow>
+
+          <SettingsRow label="Password">
+            <button onClick={() => { setShowPasswordChange(o => !o); setPwMsg(null) }} style={btn('ghost', 'sm')}>
+              {showPasswordChange ? 'Cancel' : 'Change'}
+            </button>
+          </SettingsRow>
+          {showPasswordChange && (
+            <div style={{ padding: '0 0 16px' }}>
+              <input type="password" value={newPassword}
+                onChange={e => setNewPassword(e.target.value)}
+                placeholder="New password (min. 8 characters)"
+                style={{ ...inputStyle, marginBottom: 8 }} />
+              <input type="password" value={confirmPassword}
+                onChange={e => setConfirmPassword(e.target.value)}
+                placeholder="Confirm new password"
+                style={{ ...inputStyle, marginBottom: 10 }} />
+              {pwMsg && (
+                <p style={{ margin: '0 0 10px', fontSize: 12, fontFamily: f.sans,
+                  color: pwMsg.type === 'success' ? C.success : C.danger }}>{pwMsg.text}</p>
+              )}
+              <button onClick={changePassword} disabled={pwSaving} style={btn('primary', 'sm')}>
+                {pwSaving ? 'Saving…' : 'Save New Password'}
+              </button>
+            </div>
+          )}
 
           <SettingsRow label="Avatar">
             <span style={{ fontSize: 22 }}>{avatar || '📚'}</span>
@@ -5623,6 +5761,7 @@ export default function App() {
   const [refreshKey, setRefreshKey] = useState(0)
   const [showActivity, setShowActivity] = useState(false) // header bell — activity feed
   const [showMessages, setShowMessages] = useState(false) // header plane — messages inbox
+  const [passwordRecovery, setPasswordRecovery] = useState(false) // clicked a "reset password" email link
 
   // Apply theme before render — all components read module-level C
   C = theme === 'light' ? LIGHT_THEME : DARK_THEME
@@ -5641,7 +5780,12 @@ export default function App() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session))
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => setSession(s))
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((e, s) => {
+      setSession(s)
+      // Fired when the user lands here via a "reset password" email link —
+      // Supabase signs them into a temporary recovery session automatically.
+      if (e === 'PASSWORD_RECOVERY') setPasswordRecovery(true)
+    })
     return () => subscription.unsubscribe()
   }, [])
 
@@ -5721,6 +5865,12 @@ export default function App() {
         </p>
       </div>
     )
+  }
+
+  // Clicked a "reset password" email link — Supabase has them in a temporary
+  // recovery session; make them set a new password before entering the app.
+  if (passwordRecovery) {
+    return <ResetPasswordPage onDone={() => setPasswordRecovery(false)} />
   }
 
   if (!session) return (
