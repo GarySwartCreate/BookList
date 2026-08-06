@@ -4382,6 +4382,56 @@ function FriendsPage({ userId }) {
         )}
       </Accordion>
 
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '4px 0 14px', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <SectionBadge icon="📋" bg={C.primary} />
+          <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontWeight: 700, fontFamily: f.sans }}>Lists</h2>
+          <CountPill n={lists.length} />
+        </div>
+        <button onClick={() => setShowNewList(true)} style={{ ...btn('accent', 'sm'), flexShrink: 0 }}>
+          + New List
+        </button>
+      </div>
+
+      <p style={{ margin: '0 0 14px', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
+        Curate a shared reading list — for a book club, a trip, or anything else — and share it with friends.
+      </p>
+
+      {listsLoading ? <Spinner /> : lists.length === 0
+        ? <EmptyState icon="📋" message="No lists yet" sub="Create one to start planning a shared shelf" />
+        : lists.map(list => (
+            <div key={list.id} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '12px 0', borderBottom: `1px solid ${C.border}`, gap: 12,
+            }}>
+              <div style={{ minWidth: 0 }}>
+                <p style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 14, color: C.text, fontFamily: f.sans }}>
+                  {list.name}
+                  {list.isOwner && (
+                    <span style={{
+                      fontSize: 10, fontWeight: 700, color: C.muted, background: C.surface2,
+                      borderRadius: 6, padding: '2px 6px', textTransform: 'uppercase', letterSpacing: '0.04em',
+                    }}>Owner</span>
+                  )}
+                </p>
+                <p style={{ margin: '2px 0 0', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
+                  {list.itemCount} book{list.itemCount === 1 ? '' : 's'}
+                </p>
+              </div>
+              <button onClick={() => setListView(list)} style={{ ...btn('ghost', 'sm'), fontSize: 13, flexShrink: 0 }}>
+                View →
+              </button>
+            </div>
+          ))
+      }
+
+      {showNewList && (
+        <CreateListModal userId={userId} onClose={() => setShowNewList(false)}
+          onCreated={(list) => { setShowNewList(false); loadLists(); setListView({ ...list, isOwner: true, itemCount: 0 }) }} />
+      )}
+
+      <div style={{ marginBottom: 28 }} />
+
       <Accordion icon="🍿" title={`Your Friends (${friends.length})`} defaultOpen>
         {loading ? <Spinner /> : friends.length === 0
           ? <EmptyState icon="👥" message="No friends yet" sub="Search above to find other readers" />
@@ -4430,50 +4480,6 @@ function FriendsPage({ userId }) {
 
       {recommendTo && (
         <RecommendPopover userId={userId} friend={recommendTo} onClose={() => setRecommendTo(null)} />
-      )}
-
-      <Accordion icon="📋" title={`Lists (${lists.length})`}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-          <p style={{ margin: 0, fontSize: 12, color: C.muted, fontFamily: f.sans, flex: 1, minWidth: 180 }}>
-            Curate a shared reading list — for a book club, a trip, or anything else — and share it with friends.
-          </p>
-          <button onClick={() => setShowNewList(true)} style={{ ...btn('accent', 'sm'), flexShrink: 0 }}>
-            + New List
-          </button>
-        </div>
-
-        {listsLoading ? <Spinner /> : lists.length === 0
-          ? <EmptyState icon="📋" message="No lists yet" sub="Create one to start planning a shared shelf" />
-          : lists.map(list => (
-              <div key={list.id} style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                padding: '12px 0', borderBottom: `1px solid ${C.border}`, gap: 12,
-              }}>
-                <div style={{ minWidth: 0 }}>
-                  <p style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 14, color: C.text, fontFamily: f.sans }}>
-                    {list.name}
-                    {list.isOwner && (
-                      <span style={{
-                        fontSize: 10, fontWeight: 700, color: C.muted, background: C.surface2,
-                        borderRadius: 6, padding: '2px 6px', textTransform: 'uppercase', letterSpacing: '0.04em',
-                      }}>Owner</span>
-                    )}
-                  </p>
-                  <p style={{ margin: '2px 0 0', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
-                    {list.itemCount} book{list.itemCount === 1 ? '' : 's'}
-                  </p>
-                </div>
-                <button onClick={() => setListView(list)} style={{ ...btn('ghost', 'sm'), fontSize: 13, flexShrink: 0 }}>
-                  View →
-                </button>
-              </div>
-            ))
-        }
-      </Accordion>
-
-      {showNewList && (
-        <CreateListModal userId={userId} onClose={() => setShowNewList(false)}
-          onCreated={(list) => { setShowNewList(false); loadLists(); setListView({ ...list, isOwner: true, itemCount: 0 }) }} />
       )}
 
       {/* Aggregated friends' shelf */}
