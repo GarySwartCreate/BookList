@@ -4928,7 +4928,7 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
             {[
               ['all', 'All'], ['reading', `${STATUS_ICONS.reading} Reading`],
               ['want_to_read', `${STATUS_ICONS.want_to_read} Want to Read`], ['read', `${STATUS_ICONS.read} Read`],
-              ['rated', '⭐ Rated'],
+              ['rated', '⭐ Rated'], ['favorites', '🏆 Favorites'],
             ].map(([key, lbl]) => (
               <button key={key} onClick={() => setBookStatus(key)} style={{ ...pill(bookStatus === key), fontSize: 12 }}>{lbl}</button>
             ))}
