@@ -4609,25 +4609,14 @@ function CreateListModal({ userId, onClose, onCreated }) {
     setSaving(true)
     setErr(null)
     try {
-      // TEMP DEBUG — remove once the RLS issue is confirmed/resolved
-      const { data: sessionData } = await supabase.auth.getSession()
-      console.log('[Lists debug] prop userId  =', userId)
-      console.log('[Lists debug] session uid  =', sessionData?.session?.user?.id)
-      console.log('[Lists debug] access token present:', !!sessionData?.session?.access_token)
-
-      const { data, error } = await supabase.from('book_lists')
-        .insert({ owner_id: userId, name: name.trim(), description: description.trim() || null })
-        .select().single()
-      if (error) {
-        console.log('[Lists debug] full error object:', error)
-        console.log('[Lists debug] error.code    =', error.code)
-        console.log('[Lists debug] error.details =', error.details)
-        console.log('[Lists debug] error.hint    =', error.hint)
-        throw error
-      }
+      const { data, error } = await supabase.rpc('create_book_list', {
+        p_name: name.trim(),
+        p_description: description.trim() || null,
+      })
+      if (error) throw error
       onCreated?.(data)
     } catch (e) {
-      setErr(`${e.message} — check browser console for [Lists debug] output`)
+      setErr(e.message)
     }
     setSaving(false)
   }
@@ -4686,10 +4675,12 @@ function ShareListModal({ list, userId, friends, onClose }) {
     setBusyId(friendId)
     try {
       if (sharedIds.has(friendId)) {
-        await supabase.from('book_list_shares').delete().eq('list_id', list.id).eq('user_id', friendId)
+        const { error } = await supabase.rpc('unshare_list', { p_list_id: list.id, p_user_id: friendId })
+        if (error) throw error
         setSharedIds(prev => { const n = new Set(prev); n.delete(friendId); return n })
       } else {
-        await supabase.from('book_list_shares').insert({ list_id: list.id, user_id: friendId })
+        const { error } = await supabase.rpc('share_list_with', { p_list_id: list.id, p_user_id: friendId })
+        if (error) throw error
         setSharedIds(prev => new Set([...prev, friendId]))
       }
     } catch (e) { alert(e.message) }
@@ -4790,8 +4781,9 @@ function AddToListModal({ list, userId, existingBookIds, onClose, onAdded }) {
     setAddingId(book.id)
     try {
       await upsertBook(book)
-      const { error } = await supabase.from('book_list_items')
-        .insert({ list_id: list.id, book_id: book.id, status: 'want_to_read', added_by: userId })
+      const { error } = await supabase.rpc('add_book_to_list', {
+        p_list_id: list.id, p_book_id: book.id, p_status: 'want_to_read',
+      })
       if (error) throw error
       onAdded?.(book.id)
     } catch (e) { alert(e.message) }
@@ -4931,12 +4923,12 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
 
   async function handleStatusChange(item, status) {
     setItems(prev => prev.map(i => i.id === item.id ? { ...i, status } : i))
-    await supabase.from('book_list_items').update({ status }).eq('id', item.id)
+    await supabase.rpc('update_list_item_status', { p_item_id: item.id, p_status: status })
   }
 
   async function handleRemove(item) {
     setItems(prev => prev.filter(i => i.id !== item.id))
-    await supabase.from('book_list_items').delete().eq('id', item.id)
+    await supabase.rpc('remove_list_item', { p_item_id: item.id })
   }
 
   const reading     = items.filter(i => i.status === 'reading')
