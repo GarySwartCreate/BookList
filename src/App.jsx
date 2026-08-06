@@ -4609,13 +4609,19 @@ function CreateListModal({ userId, onClose, onCreated }) {
     setSaving(true)
     setErr(null)
     try {
+      // TEMP DEBUG — remove once the RLS issue is confirmed/resolved
+      const { data: sessionData } = await supabase.auth.getSession()
+      console.log('[Lists debug] prop userId  =', userId)
+      console.log('[Lists debug] session uid  =', sessionData?.session?.user?.id)
+      console.log('[Lists debug] access token present:', !!sessionData?.session?.access_token)
+
       const { data, error } = await supabase.from('book_lists')
         .insert({ owner_id: userId, name: name.trim(), description: description.trim() || null })
         .select().single()
       if (error) throw error
       onCreated?.(data)
     } catch (e) {
-      setErr(e.message)
+      setErr(`${e.message} — check browser console for [Lists debug] output`)
     }
     setSaving(false)
   }
