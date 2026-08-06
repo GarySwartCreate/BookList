@@ -2337,7 +2337,7 @@ function RecoCard({ book, userId, myBookIds, myBookKeys, myBooks, onAdded, onDis
   }
 
   return (
-    <div className={`disco-tile${hovered ? ' disco-tapped' : ''}`} style={{ flexShrink: 0, position: 'relative' }}
+    <div style={{ flexShrink: 0, position: 'relative' }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}>
       {showRating && (
@@ -2353,8 +2353,16 @@ function RecoCard({ book, userId, myBookIds, myBookKeys, myBooks, onAdded, onDis
           background: 'rgba(10,8,24,0.72)',
           display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'flex-end',
-          paddingBottom: 14,
+          gap: 8, padding: '10px 8px 14px',
         }}>
+          {caption && (
+            <p style={{
+              margin: 0, fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.9)',
+              fontFamily: f.sans, textAlign: 'center', lineHeight: 1.3,
+              display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+              overflow: 'hidden', textShadow: '0 1px 3px rgba(0,0,0,0.6)',
+            }}>{caption}</p>
+          )}
           {inLibrary ? (
             <div style={{
               background: STATUS_COLORS[added]?.bg || 'rgba(52,211,153,0.15)', borderRadius: 6,
@@ -2392,13 +2400,6 @@ function RecoCard({ book, userId, myBookIds, myBookKeys, myBooks, onAdded, onDis
             </div>
           )}
         </div>
-      )}
-      {caption && hovered && (
-        <p className="disco-caption" style={{
-          margin: '6px 0 0', fontSize: 11, color: C.muted, fontFamily: f.sans,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120,
-          opacity: 1,
-        }}>{caption}</p>
       )}
     </div>
   )

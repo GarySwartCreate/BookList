@@ -63,11 +63,6 @@ select, textarea, input {
   .poster-card:focus-visible { outline: none; }
 }
 
-/* Discover tile captions — reveal on hover (desktop) or on tap (mobile, via .disco-tapped) */
-.disco-caption { opacity: 0; transition: opacity 0.15s ease; }
-.disco-tile:hover .disco-caption,
-.disco-tile.disco-tapped .disco-caption { opacity: 1; }
-
 /* Remove autofill yellow */
 input:-webkit-autofill {
   -webkit-box-shadow: 0 0 0 30px #242840 inset !important;
