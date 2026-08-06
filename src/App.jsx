@@ -216,6 +216,26 @@ function parseVolume(item) {
   }
 }
 
+// The same real-world book can end up as multiple `books` rows with different
+// IDs — a Google Books volume ID, an Open Library `ol_...` ID, or a hash ID
+// generated during CSV import — depending on how it was added. ID-only
+// matching then misses "this is already on my shelf" whenever a friend's copy
+// was added via a different source than yours. Normalized title+author is a
+// reliable fallback match across those cases.
+function bookKey(book) {
+  const title  = (book?.title || '').trim().toLowerCase()
+  const author = (book?.authors?.[0] || '').trim().toLowerCase()
+  if (!title) return null
+  return `${title}|${author}`
+}
+
+function isInMyLibrary(book, myBookIds, myBookKeys) {
+  if (!book) return false
+  if (myBookIds?.has(book.id)) return true
+  const key = bookKey(book)
+  return key ? !!myBookKeys?.has(key) : false
+}
+
 async function upsertBook(book) {
   const { error } = await supabase.from('books').upsert({
     id: book.id, title: book.title, authors: book.authors,
@@ -232,10 +252,21 @@ async function upsertBook(book) {
   if (error) { console.error('upsertBook:', error); throw error }
 }
 
+// Want to Read is a user-ordered queue (drag-to-reorder sorts by `position`
+// ascending). New entries need to land at the END of that order, not jump to
+// the front — so look up the current highest position and add one.
+async function nextWantToReadPosition(userId) {
+  const { data } = await supabase.from('user_books').select('position')
+    .eq('user_id', userId).eq('status', 'want_to_read')
+    .order('position', { ascending: false }).limit(1).maybeSingle()
+  return (data?.position ?? -1) + 1
+}
+
 async function addToLibrary(userId, book, status) {
   await upsertBook(book)
+  const position = status === 'want_to_read' ? await nextWantToReadPosition(userId) : 0
   const { data, error } = await supabase.from('user_books').upsert({
-    user_id: userId, book_id: book.id, status, position: 0,
+    user_id: userId, book_id: book.id, status, position,
   }, { onConflict: 'user_id,book_id' }).select().single()
   if (error) throw error
   return data
@@ -1453,7 +1484,11 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
     setStatus(newStatus)
     try {
       if (userBookId) {
-        const { error } = await supabase.from('user_books').update({ status: newStatus }).eq('id', userBookId)
+        // Moving (back) into Want to Read should append to the end of the
+        // queue, not leave whatever stale/zero position it had before.
+        const patch = { status: newStatus }
+        if (newStatus === 'want_to_read') patch.position = await nextWantToReadPosition(userId)
+        const { error } = await supabase.from('user_books').update(patch).eq('id', userBookId)
         if (error) throw error
       } else {
         const row = await addToLibrary(userId, book, newStatus)
@@ -2200,7 +2235,7 @@ function AuthPage({ inviteFrom, sharedBookId, sharedBy }) {
 // ================================================================
 // RecoCard – poster with WatchList-style hover quick-add circles
 // ================================================================
-function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal, caption }) {
+function RecoCard({ book, userId, myBookIds, myBookKeys, onAdded, onDismiss, onOpenModal, caption }) {
   const isMobile = useIsMobile()
   const [hovered,  setHovered]  = useState(false)
   const [adding,   setAdding]   = useState(null)
@@ -2208,7 +2243,7 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal, ca
   const [showRating, setShowRating] = useState(false)
   const hideTimerRef = useRef(null)
   useEffect(() => () => clearTimeout(hideTimerRef.current), [])
-  const inLibrary = myBookIds?.has(book.id) || !!added
+  const inLibrary = isInMyLibrary(book, myBookIds, myBookKeys) || !!added
 
   async function handleAdd(status) {
     setAdding(status)
@@ -2219,7 +2254,7 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal, ca
         setShowRating(true)
         // Don't call onAdded yet — wait until after rating so card stays mounted
       } else {
-        onAdded?.(book.id)
+        onAdded?.(book.id, book)
       }
     } catch (e) { alert(e.message) }
     setAdding(null)
@@ -2234,7 +2269,7 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal, ca
     await supabase.from('user_books')
       .update({ rating: stars }).eq('user_id', userId).eq('book_id', book.id)
     setShowRating(false)
-    onAdded?.(book.id)  // reload after rating is saved
+    onAdded?.(book.id, book)  // reload after rating is saved
   }
 
   // Mobile has no hover — tap reveals the action icons for a couple seconds,
@@ -2256,7 +2291,7 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal, ca
       onMouseLeave={() => setHovered(false)}>
       {showRating && (
         <RatingPopup title={book.title} onRate={handleRated}
-          onSkip={() => { setShowRating(false); onAdded?.(book.id) }} />
+          onSkip={() => { setShowRating(false); onAdded?.(book.id, book) }} />
       )}
       <PosterCard book={book} onClick={handleTileTap} />
 
@@ -2321,7 +2356,7 @@ function RecoCard({ book, userId, myBookIds, onAdded, onDismiss, onOpenModal, ca
 // ================================================================
 // FriendBookCard – a book on a friend's shelf, with quick-add if you don't have it
 // ================================================================
-function FriendBookCard({ ub, profile, userId, myBookIds, onAdded, onOpenModal }) {
+function FriendBookCard({ ub, profile, userId, myBookIds, myBookKeys, onAdded, onOpenModal }) {
   const isMobile = useIsMobile()
   const [hovered, setHovered] = useState(false)
   const [adding,  setAdding]  = useState(null)
@@ -2329,14 +2364,14 @@ function FriendBookCard({ ub, profile, userId, myBookIds, onAdded, onOpenModal }
   const hideTimerRef = useRef(null)
   useEffect(() => () => clearTimeout(hideTimerRef.current), [])
   const book = ub.books || {}
-  const inLibrary = myBookIds?.has(book.id) || !!added
+  const inLibrary = isInMyLibrary(book, myBookIds, myBookKeys) || !!added
 
   async function handleAdd(status) {
     setAdding(status)
     try {
       await addToLibrary(userId, book, status)
       setAdded(status)
-      onAdded?.(book.id)
+      onAdded?.(book.id, book)
     } catch (e) { alert(e.message) }
     setAdding(null)
   }
@@ -2384,12 +2419,6 @@ function FriendBookCard({ ub, profile, userId, myBookIds, onAdded, onOpenModal }
           </div>
         )}
       </div>
-      <p style={{
-        margin: '6px 0 0', fontSize: 11, color: C.muted, fontFamily: f.sans,
-        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-      }}>
-        {profile?.avatar_url} {profile?.display_name || profile?.username || 'Friend'}
-      </p>
     </div>
   )
 }
@@ -3008,6 +3037,7 @@ function DiscoverSectionBody({ expanded, loading, items, renderItem, emptyMsg })
 function DiscoverPage({ userId }) {
   const [loading,      setLoading]      = useState(true)
   const [myBookIds,    setMyBookIds]    = useState(new Set())
+  const [myBookKeys,   setMyBookKeys]   = useState(new Set()) // normalized title|author fallback match
   const [dismissedRecs, setDismissedRecs] = useState(new Set())
   const [modal,        setModal]        = useState(null)
   const [expanded,     setExpanded]     = useState(null) // null | 'friends' | 'recommended' | 'trending' | 'picks'
@@ -3151,6 +3181,7 @@ function DiscoverPage({ userId }) {
     const lib = myLib || []
     const ids = new Set(lib.map(u => u.book_id))
     setMyBookIds(ids)
+    setMyBookKeys(new Set(lib.map(u => bookKey(u.books)).filter(Boolean)))
 
     // ── Friends' activity ──
     const { data: fships } = await supabase.from('friendships')
@@ -3189,8 +3220,10 @@ function DiscoverPage({ userId }) {
 
   useEffect(() => { loadDiscoverData() }, [loadDiscoverData])
 
-  function markAdded(id) {
+  function markAdded(id, book) {
     setMyBookIds(prev => new Set([...prev, id]))
+    const key = bookKey(book)
+    if (key) setMyBookKeys(prev => new Set([...prev, key]))
   }
 
   // ── Derived, filtered views ──
@@ -3202,6 +3235,16 @@ function DiscoverPage({ userId }) {
     if (friendsFilter === 'recent' && (Date.now() - new Date(ub.updated_at)) / 86400000 > 14) return false
     if (friendsGenre !== 'all' && !bookGenres(ub.books).includes(friendsGenre)) return false
     return true
+  }).sort((a, b) => {
+    // Books already on your own shelf are pushed to the very end, so the row
+    // leads with things you haven't seen yet — then highly-rated first, then
+    // most recently updated.
+    const aOwned = isInMyLibrary(a.books, myBookIds, myBookKeys)
+    const bOwned = isInMyLibrary(b.books, myBookIds, myBookKeys)
+    if (aOwned !== bOwned) return aOwned ? 1 : -1
+    const aRating = a.rating || 0, bRating = b.rating || 0
+    if (aRating !== bRating) return bRating - aRating
+    return new Date(b.updated_at) - new Date(a.updated_at)
   })
 
   const recGenres = topCategories(recommended)
@@ -3253,7 +3296,7 @@ function DiscoverPage({ userId }) {
             items={friendsVisible} emptyMsg="Add friends to see what they're reading"
             renderItem={ub => (
               <FriendBookCard key={ub.id} ub={ub} profile={profileMap[ub.user_id]} userId={userId}
-                myBookIds={myBookIds} onAdded={markAdded}
+                myBookIds={myBookIds} myBookKeys={myBookKeys} onAdded={markAdded}
                 onOpenModal={() => setModal({ book: ub.books })} />
             )} />
         </div>
@@ -3273,8 +3316,8 @@ function DiscoverPage({ userId }) {
           <DiscoverSectionBody expanded={expanded === 'recommended'} loading={loading}
             items={recVisible} emptyMsg="Recommendations will show up here as you use the app"
             renderItem={book => (
-              <RecoCard key={book.id} book={book} userId={userId} myBookIds={myBookIds}
-                onAdded={id => { markAdded(id); loadDiscoverData() }}
+              <RecoCard key={book.id} book={book} userId={userId} myBookIds={myBookIds} myBookKeys={myBookKeys}
+                onAdded={(id, b) => { markAdded(id, b); loadDiscoverData() }}
                 onDismiss={id => setDismissedRecs(prev => new Set([...prev, id]))}
                 onOpenModal={() => setModal({ book })} caption={book.reason} />
             )} />
@@ -3293,8 +3336,8 @@ function DiscoverPage({ userId }) {
           <DiscoverSectionBody expanded={expanded === 'trending'} loading={loading}
             items={trendVisible} emptyMsg="Nothing trending right now."
             renderItem={book => (
-              <RecoCard key={book.id} book={book} userId={userId} myBookIds={myBookIds}
-                onAdded={id => { markAdded(id); loadDiscoverData() }}
+              <RecoCard key={book.id} book={book} userId={userId} myBookIds={myBookIds} myBookKeys={myBookKeys}
+                onAdded={(id, b) => { markAdded(id, b); loadDiscoverData() }}
                 onDismiss={id => setDismissedRecs(prev => new Set([...prev, id]))}
                 onOpenModal={() => setModal({ book })}
                 caption={book.adds ? `${book.adds} readers added this` : book.reason} />
@@ -3316,8 +3359,8 @@ function DiscoverPage({ userId }) {
           <DiscoverSectionBody expanded={expanded === 'picks'} loading={loading}
             items={picksVisible} emptyMsg="Loading picks…"
             renderItem={book => (
-              <RecoCard key={book.id} book={book} userId={userId} myBookIds={myBookIds}
-                onAdded={id => { markAdded(id); loadDiscoverData() }}
+              <RecoCard key={book.id} book={book} userId={userId} myBookIds={myBookIds} myBookKeys={myBookKeys}
+                onAdded={(id, b) => { markAdded(id, b); loadDiscoverData() }}
                 onDismiss={id => setDismissedRecs(prev => new Set([...prev, id]))}
                 onOpenModal={() => setModal({ book })} caption={book.reason} />
             )} />
@@ -5175,7 +5218,11 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
     setProgress([0, finalRows.length])
     let imported = 0, skipped = 0, failed = 0
 
-    await pLimit(finalRows, async (item) => {
+    // Imported Want to Read rows should queue up after whatever's already
+    // there, in CSV order — not all pile onto position 0 ahead of it.
+    const wantToReadBase = await nextWantToReadPosition(userId)
+
+    await pLimit(finalRows, async (item, i) => {
       try {
         const book = await fetchBookMeta(item)
         if (!book?.id) { failed++; return }
@@ -5184,7 +5231,7 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
           user_id: userId, book_id: book.id,
           status:  item.status, rating: item.rating || null,
           notes:   item.notes  || null,
-          position: 0,
+          position: item.status === 'want_to_read' ? wantToReadBase + i : 0,
         }, { onConflict: 'user_id,book_id' })
         if (error) { failed++; return }
         imported++
