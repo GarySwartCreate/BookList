@@ -4618,7 +4618,13 @@ function CreateListModal({ userId, onClose, onCreated }) {
       const { data, error } = await supabase.from('book_lists')
         .insert({ owner_id: userId, name: name.trim(), description: description.trim() || null })
         .select().single()
-      if (error) throw error
+      if (error) {
+        console.log('[Lists debug] full error object:', error)
+        console.log('[Lists debug] error.code    =', error.code)
+        console.log('[Lists debug] error.details =', error.details)
+        console.log('[Lists debug] error.hint    =', error.hint)
+        throw error
+      }
       onCreated?.(data)
     } catch (e) {
       setErr(`${e.message} — check browser console for [Lists debug] output`)
