@@ -4157,6 +4157,12 @@ function FriendsPage({ userId }) {
     if (statusFilter === 'highly_rated') return (ub.rating || 0) >= 4
     if (statusFilter === 'recent') return true // already sorted by updated_at desc
     return ub.status === statusFilter
+  }).sort((a, b) => {
+    // Default order: Top 10 picks first, then highest rated, then most recent.
+    if (!!b.top_10 !== !!a.top_10) return b.top_10 ? 1 : -1
+    const aRating = a.rating || 0, bRating = b.rating || 0
+    if (aRating !== bRating) return bRating - aRating
+    return new Date(b.updated_at) - new Date(a.updated_at)
   })
 
   // If viewing a friend's full list, render that component
