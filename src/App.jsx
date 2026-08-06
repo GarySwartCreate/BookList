@@ -3476,6 +3476,7 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
   const [readGenre,    setReadGenre]    = useState('all')
   const [expandReading,     setExpandReading]     = useState(false)
   const [expandWantToRead,  setExpandWantToRead]  = useState(false)
+  const [expandRead,        setExpandRead]        = useState(true) // Read defaults open; count is still clickable to collapse
   const hideTimerRef = useRef(null)
   useEffect(() => () => clearTimeout(hideTimerRef.current), [])
 
@@ -3692,67 +3693,84 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, onBack
         </div>
       )}
 
-      {/* Read — expands as a full grid, with sort/genre filter — mirrors Home */}
-      <div style={{ marginBottom: 36 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 10, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <SectionBadge icon="✅" bg={C.success} />
-            <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontWeight: 700, fontFamily: f.sans }}>Read</h2>
-            <CountPill n={read.length} />
-          </div>
-          <button onClick={() => setShowReadFilter(o => !o)} style={{ ...pill(showReadFilter), fontSize: 12 }}>
-            Filter ▾
-          </button>
-        </div>
-
-        {showReadFilter && (
-          <div style={{
-            background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10,
-            padding: 14, marginBottom: 16,
-          }}>
-            <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
-              textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Sort</p>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: readGenres.length > 0 ? 14 : 0 }}>
-              {READ_SORTS.map(([key, lbl]) => (
-                <button key={key} onClick={() => setReadSort(key)} style={pill(readSort === key)}>
-                  {lbl}
-                </button>
-              ))}
-            </div>
-            {readGenres.length > 0 && (
-              <>
-                <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
-                  textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Genre</p>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button onClick={() => setReadGenre('all')} style={{ ...pill(readGenre === 'all'), fontSize: 12 }}>
-                    All
-                  </button>
-                  {readGenres.map(g => (
-                    <button key={g} onClick={() => setReadGenre(g)} style={{ ...pill(readGenre === g), fontSize: 12 }}>
-                      {g}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        )}
-
-        {loading ? <Spinner /> : read.length === 0
-          ? <p style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, fontStyle: 'italic', margin: 0 }}>
-              Nothing marked as read yet
-            </p>
-          : (
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
-              gap: isMobile ? 9 : 16,
+      {/* Read — count is clickable to collapse/expand, same as Reading/Want to Read above */}
+      {!expandRead ? (
+        <HorizontalRow
+          title="Read"
+          icon="✅"
+          iconBg={C.success}
+          items={read}
+          renderItem={renderTile}
+          loading={loading}
+          emptyMsg="Nothing marked as read yet"
+          seeAllAction={() => setExpandRead(true)}
+        />
+      ) : (
+        <div style={{ marginBottom: 36 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 10, flexWrap: 'wrap' }}>
+            <button onClick={() => setExpandRead(false)} style={{
+              display: 'flex', alignItems: 'center', gap: 10, background: 'none', border: 'none',
+              padding: 0, margin: 0, cursor: 'pointer', fontFamily: f.sans,
             }}>
-              {read.map(renderTile)}
+              <SectionBadge icon="✅" bg={C.success} />
+              <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontWeight: 700, fontFamily: f.sans }}>Read</h2>
+              <CountPill n={read.length} />
+              <span style={{ color: C.muted, fontSize: 13 }}>‹ collapse</span>
+            </button>
+            <button onClick={() => setShowReadFilter(o => !o)} style={{ ...pill(showReadFilter), fontSize: 12 }}>
+              Filter ▾
+            </button>
+          </div>
+
+          {showReadFilter && (
+            <div style={{
+              background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10,
+              padding: 14, marginBottom: 16,
+            }}>
+              <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+                textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Sort</p>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: readGenres.length > 0 ? 14 : 0 }}>
+                {READ_SORTS.map(([key, lbl]) => (
+                  <button key={key} onClick={() => setReadSort(key)} style={pill(readSort === key)}>
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+              {readGenres.length > 0 && (
+                <>
+                  <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+                    textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Genre</p>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button onClick={() => setReadGenre('all')} style={{ ...pill(readGenre === 'all'), fontSize: 12 }}>
+                      All
+                    </button>
+                    {readGenres.map(g => (
+                      <button key={g} onClick={() => setReadGenre(g)} style={{ ...pill(readGenre === g), fontSize: 12 }}>
+                        {g}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
-          )
-        }
-      </div>
+          )}
+
+          {loading ? <Spinner /> : read.length === 0
+            ? <p style={{ color: C.muted, fontFamily: f.sans, fontSize: 13, fontStyle: 'italic', margin: 0 }}>
+                Nothing marked as read yet
+              </p>
+            : (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
+                gap: isMobile ? 9 : 16,
+              }}>
+                {read.map(renderTile)}
+              </div>
+            )
+          }
+        </div>
+      )}
 
       {modal && (
         <BookDetailModal item={modal} userId={userId}
