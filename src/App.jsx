@@ -2393,10 +2393,11 @@ function RecoCard({ book, userId, myBookIds, myBookKeys, myBooks, onAdded, onDis
           )}
         </div>
       )}
-      {caption && (
+      {caption && hovered && (
         <p className="disco-caption" style={{
           margin: '6px 0 0', fontSize: 11, color: C.muted, fontFamily: f.sans,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120,
+          opacity: 1,
         }}>{caption}</p>
       )}
     </div>
