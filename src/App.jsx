@@ -5563,21 +5563,21 @@ function relativeTime(iso) {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-function activitySentence(row) {
-  const name  = row.profile?.display_name || row.profile?.username || 'A friend'
-  const title = row.books?.title || 'a book'
-  if (row.status === 'read') {
-    return row.rating
-      ? `${name} just read ${title} and rated it ${'★'.repeat(row.rating)}`
-      : `${name} just finished reading ${title}`
-  }
-  if (row.status === 'reading')      return `${name} started reading ${title}`
-  if (row.status === 'want_to_read') return `${name} wants to read ${title}`
-  return `${name} updated ${title}`
+// Just the action clause — the book title itself is always rendered as its
+// own bold, clickable line below (see ActivityFeedModal), so this shouldn't
+// repeat it.
+function activityAction(row) {
+  if (row.kind === 'recommendation') return 'recommended this to you'
+  const status = row.status, rating = row.rating
+  if (status === 'read') return rating ? `just read this and rated it ${'★'.repeat(rating)}` : 'just finished reading this'
+  if (status === 'reading')      return 'started reading this'
+  if (status === 'want_to_read') return 'wants to read this'
+  return 'updated this'
 }
 
 function ActivityFeedModal({ userId, onClose }) {
-  const [rows, setRows] = useState(null)
+  const [rows,  setRows]  = useState(null)
+  const [modal, setModal] = useState(null) // book clicked from the feed
 
   useEffect(() => {
     let cancelled = false
@@ -5586,13 +5586,28 @@ function ActivityFeedModal({ userId, onClose }) {
         .eq('status', 'accepted').or(`requester_id.eq.${userId},addressee_id.eq.${userId}`)
       const friendIds = (fships || []).map(f => f.requester_id === userId ? f.addressee_id : f.requester_id)
       if (friendIds.length === 0) { if (!cancelled) setRows([]); return }
-      const [{ data: activity }, { data: profiles }] = await Promise.all([
+      const [{ data: activity }, { data: recs }] = await Promise.all([
         supabase.from('user_books').select('*, books(*)').in('user_id', friendIds)
           .order('updated_at', { ascending: false }).limit(30),
-        supabase.from('profiles').select('*').in('id', friendIds),
+        // Recommendations sent to you — shown in the same feed as WatchList
+        // does, complete with the personal note if one was attached.
+        supabase.from('book_recommendations').select('*, books(*)').eq('to_user_id', userId)
+          .order('created_at', { ascending: false }).limit(30),
       ])
+      const profileIds = [...new Set([...friendIds, ...(recs || []).map(r => r.from_user_id)])]
+      const { data: profiles } = profileIds.length
+        ? await supabase.from('profiles').select('*').in('id', profileIds) : { data: [] }
       const pm = Object.fromEntries((profiles || []).map(p => [p.id, p]))
-      const merged = (activity || []).map(r => ({ ...r, profile: pm[r.user_id] }))
+
+      const shelfRows = (activity || []).map(r => ({
+        kind: 'shelf', id: `shelf_${r.id}`, at: r.updated_at,
+        profile: pm[r.user_id], books: r.books, status: r.status, rating: r.rating,
+      }))
+      const recRows = (recs || []).filter(r => r.books).map(r => ({
+        kind: 'recommendation', id: `rec_${r.id}`, at: r.created_at,
+        profile: pm[r.from_user_id], books: r.books, message: r.message,
+      }))
+      const merged = [...shelfRows, ...recRows].sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 40)
       if (!cancelled) setRows(merged)
     }
     load()
@@ -5623,25 +5638,52 @@ function ActivityFeedModal({ userId, onClose }) {
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {rows === null ? <Spinner /> : rows.length === 0
             ? <EmptyState icon="🔔" message="No recent activity" sub="Add friends to see what they're reading" />
-            : rows.map(r => (
-              <div key={r.id} style={{
-                display: 'flex', alignItems: 'flex-start', gap: 10,
-                padding: '10px 0', borderBottom: `1px solid ${C.border}`,
-              }}>
-                <span style={{ fontSize: 18, flexShrink: 0 }}>{r.profile?.avatar_url || '👤'}</span>
-                <div style={{ minWidth: 0 }}>
-                  <p style={{ margin: 0, fontSize: 13, color: C.text, fontFamily: f.sans, lineHeight: 1.4 }}>
-                    {activitySentence(r)}
-                  </p>
-                  <p style={{ margin: '2px 0 0', fontSize: 11, color: C.muted, fontFamily: f.sans }}>
-                    {relativeTime(r.updated_at)}
-                  </p>
+            : rows.map(r => {
+              const book = r.books || {}
+              return (
+                <div key={r.id} style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 10,
+                  padding: '10px 0', borderBottom: `1px solid ${C.border}`,
+                }}>
+                  <div onClick={() => setModal(book)} style={{ cursor: 'pointer', flexShrink: 0 }}>
+                    {book.cover_url
+                      ? <img src={book.cover_url} alt="" style={{ width: 40, height: 60, objectFit: 'cover', borderRadius: 4 }} />
+                      : <NoCover title={book.title} width={40} height={60} />
+                    }
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <p style={{ margin: 0, fontSize: 13, color: C.text, fontFamily: f.sans, lineHeight: 1.4 }}>
+                      <span style={{ fontWeight: 700 }}>{r.profile?.display_name || r.profile?.username || 'A friend'}</span>
+                      {' '}<span style={{ color: C.muted }}>{activityAction(r)}</span>
+                    </p>
+                    <p onClick={() => setModal(book)} style={{
+                      margin: '2px 0 0', fontSize: 14, fontWeight: 700, color: C.text, fontFamily: f.sans,
+                      cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'transparent',
+                    }}
+                      onMouseEnter={e => e.currentTarget.style.textDecorationColor = C.muted}
+                      onMouseLeave={e => e.currentTarget.style.textDecorationColor = 'transparent'}>
+                      {book.title || 'a book'}
+                    </p>
+                    {r.kind === 'recommendation' && r.message && (
+                      <p style={{ margin: '2px 0 0', fontSize: 12.5, color: C.muted, fontFamily: f.sans, fontStyle: 'italic' }}>
+                        "{r.message}"
+                      </p>
+                    )}
+                    <p style={{ margin: '2px 0 0', fontSize: 11, color: C.muted, fontFamily: f.sans }}>
+                      {relativeTime(r.at)}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            ))
+              )
+            })
           }
         </div>
       </div>
+
+      {modal && (
+        <BookDetailModal item={modal} userId={userId}
+          onClose={() => setModal(null)} onUpdate={() => {}} />
+      )}
     </div>
   )
 }
