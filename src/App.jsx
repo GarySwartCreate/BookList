@@ -4108,6 +4108,7 @@ function FriendsPage({ userId }) {
   const [listsLoading,  setListsLoading]  = useState(true)
   const [listView,     setListView]     = useState(null) // list being viewed in detail
   const [showNewList,  setShowNewList]  = useState(false)
+  const [manageList,   setManageList]   = useState(null) // list being managed (rename/members/add/delete)
 
   const loadLists = useCallback(async () => {
     setListsLoading(true)
@@ -4399,23 +4400,33 @@ function FriendsPage({ userId }) {
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 padding: '12px 0', borderBottom: `1px solid ${C.border}`, gap: 12,
               }}>
-                <div style={{ minWidth: 0 }}>
-                  <p style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 14, color: C.text, fontFamily: f.sans }}>
-                    {list.name}
-                    {list.isOwner && (
-                      <span style={{
-                        fontSize: 10, fontWeight: 700, color: C.muted, background: C.surface2,
-                        borderRadius: 6, padding: '2px 6px', textTransform: 'uppercase', letterSpacing: '0.04em',
-                      }}>Owner</span>
-                    )}
-                  </p>
-                  <p style={{ margin: '2px 0 0', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
-                    {list.itemCount} book{list.itemCount === 1 ? '' : 's'}
-                  </p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                  <SectionBadge icon="📋" bg={C.accent} />
+                  <div style={{ minWidth: 0 }}>
+                    <p style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 14, color: C.text, fontFamily: f.sans }}>
+                      {list.name}
+                      {list.isOwner && (
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, color: C.muted, background: C.surface2,
+                          borderRadius: 6, padding: '2px 6px', textTransform: 'uppercase', letterSpacing: '0.04em',
+                        }}>Owner</span>
+                      )}
+                    </p>
+                    <p style={{ margin: '2px 0 0', fontSize: 12, color: C.muted, fontFamily: f.sans }}>
+                      {list.itemCount} book{list.itemCount === 1 ? '' : 's'}
+                    </p>
+                  </div>
                 </div>
-                <button onClick={() => setListView(list)} style={{ ...btn('ghost', 'sm'), fontSize: 13, flexShrink: 0 }}>
-                  View →
-                </button>
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                  {list.isOwner && (
+                    <button onClick={() => setManageList(list)} style={{ ...btn('subtle', 'sm'), fontSize: 13 }}>
+                      ⚙️ Manage
+                    </button>
+                  )}
+                  <button onClick={() => setListView(list)} style={{ ...btn('ghost', 'sm'), fontSize: 13 }}>
+                    View →
+                  </button>
+                </div>
               </div>
             ))
         }
@@ -4424,6 +4435,13 @@ function FriendsPage({ userId }) {
       {showNewList && (
         <CreateListModal userId={userId} onClose={() => setShowNewList(false)}
           onCreated={(list) => { setShowNewList(false); loadLists(); setListView({ ...list, isOwner: true, itemCount: 0 }) }} />
+      )}
+
+      {manageList && (
+        <ManageListModal list={manageList} userId={userId} friends={friends}
+          onClose={() => setManageList(null)}
+          onRenamed={(updated) => { setManageList(updated); loadLists() }}
+          onDeleted={() => { setManageList(null); loadLists() }} />
       )}
 
       <Accordion icon="🍿" title={`Your Friends (${friends.length})`} defaultOpen>
@@ -4878,6 +4896,119 @@ function AddToListModal({ list, userId, existingBookIds, onClose, onAdded }) {
 }
 
 // ================================================================
+// ManageListModal – owner hub: rename, add books, manage members, delete
+// ================================================================
+function ManageListModal({ list, userId, friends, onClose, onRenamed, onDeleted }) {
+  const isMobile = useIsMobile()
+  const [name,        setName]        = useState(list.name)
+  const [description, setDescription] = useState(list.description || '')
+  const [saving,       setSaving]      = useState(false)
+  const [deleting,     setDeleting]    = useState(false)
+  const [err,          setErr]         = useState(null)
+  const [showAdd,      setShowAdd]     = useState(false)
+  const [showShare,    setShowShare]   = useState(false)
+  const [existingIds,  setExistingIds] = useState(new Set())
+
+  useEffect(() => {
+    supabase.from('book_list_items').select('book_id').eq('list_id', list.id)
+      .then(({ data }) => setExistingIds(new Set((data || []).map(r => r.book_id))))
+  }, [list.id])
+
+  async function handleSave() {
+    if (!name.trim()) return
+    setSaving(true)
+    setErr(null)
+    try {
+      const { data, error } = await supabase.rpc('update_book_list', {
+        p_list_id: list.id, p_name: name.trim(), p_description: description.trim() || null,
+      })
+      if (error) throw error
+      onRenamed?.({ ...list, ...data })
+    } catch (e) {
+      setErr(e.message)
+    }
+    setSaving(false)
+  }
+
+  async function handleDelete() {
+    if (!window.confirm(`Delete "${list.name}"? This removes it for everyone it's shared with — this can't be undone.`)) return
+    setDeleting(true)
+    try {
+      const { error } = await supabase.rpc('delete_book_list', { p_list_id: list.id })
+      if (error) throw error
+      onDeleted?.()
+    } catch (e) {
+      setErr(e.message)
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <div onClick={e => e.target === e.currentTarget && onClose()}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1200,
+        background: 'rgba(5,4,15,0.92)', backdropFilter: 'blur(6px)',
+        display: 'flex', alignItems: isMobile ? 'flex-end' : 'center',
+        justifyContent: 'center', padding: isMobile ? 0 : 20,
+      }}>
+      <div style={{
+        background: C.surface, width: '100%', maxWidth: isMobile ? '100%' : 460,
+        maxHeight: isMobile ? '85vh' : '80vh', overflowY: 'auto',
+        borderRadius: isMobile ? '16px 16px 0 0' : 14,
+        padding: isMobile ? '20px 16px 28px' : 24,
+        border: `1px solid ${C.border}`, boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <h3 style={{ margin: 0, color: C.text, fontFamily: f.serif, fontSize: 20 }}>⚙️ Manage List</h3>
+          <button onClick={onClose} style={{
+            background: C.surface2, border: 'none', color: C.muted, borderRadius: '50%',
+            width: 28, height: 28, cursor: 'pointer', fontSize: 15,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>×</button>
+        </div>
+
+        <p style={{ margin: '0 0 6px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+          textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Name</p>
+        <input value={name} onChange={e => setName(e.target.value)}
+          style={{ ...inputStyle, marginBottom: 10 }} />
+        <p style={{ margin: '0 0 6px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+          textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Description</p>
+        <textarea value={description} onChange={e => setDescription(e.target.value)}
+          rows={2} style={{ ...inputStyle, resize: 'vertical', marginBottom: 8 }} />
+        {err && <p style={{ margin: '0 0 10px', color: C.danger, fontSize: 12, fontFamily: f.sans }}>{err}</p>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 20 }}>
+          <button onClick={handleSave} disabled={saving || !name.trim()} style={btn('accent', 'sm')}>
+            {saving ? 'Saving…' : 'Save Changes'}
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
+          <button onClick={() => setShowAdd(true)} style={{ ...btn('subtle', 'sm'), justifyContent: 'flex-start' }}>
+            + Add Books
+          </button>
+          <button onClick={() => setShowShare(true)} style={{ ...btn('subtle', 'sm'), justifyContent: 'flex-start' }}>
+            👥 Manage Members
+          </button>
+          <button onClick={handleDelete} disabled={deleting}
+            style={{ ...btn('danger', 'sm'), justifyContent: 'flex-start' }}>
+            {deleting ? 'Deleting…' : '🗑 Delete List'}
+          </button>
+        </div>
+      </div>
+
+      {showAdd && (
+        <AddToListModal list={list} userId={userId} existingBookIds={existingIds}
+          onClose={() => setShowAdd(false)}
+          onAdded={(bookId) => setExistingIds(prev => new Set([...prev, bookId]))} />
+      )}
+      {showShare && (
+        <ShareListModal list={list} userId={userId} friends={friends} onClose={() => setShowShare(false)} />
+      )}
+    </div>
+  )
+}
+
+// ================================================================
 // ListDetailView – full-page view of a shared list: Reading/Want to
 // Read/Read sections, add-book search, and (owner-only) share picker.
 // Any member (owner or shared-with) can add books and move them
@@ -4894,6 +5025,7 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
   const [showMembers,   setShowMembers]  = useState(false)
   const [members,       setMembers]      = useState([])
   const [ownerProfile,  setOwnerProfile] = useState(null)
+  const [focusedStatus, setFocusedStatus] = useState(null) // null | 'reading' | 'want_to_read' | 'read'
   const hideTimerRef = useRef(null)
   useEffect(() => () => clearTimeout(hideTimerRef.current), [])
 
@@ -4938,27 +5070,53 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
   const wantToRead  = items.filter(i => i.status === 'want_to_read')
   const read        = items.filter(i => i.status === 'read')
 
-  function renderSection(title, icon, iconBg, list_) {
+  // Drag-to-reorder — Want to Read section, same press-and-hold pattern
+  // (native HTML5 DnD on desktop, grip-handle pointer drag on mobile) used
+  // for the personal library's Want to Read row on Home.
+  async function persistOrder(reordered) {
+    setItems(prev => {
+      const others = prev.filter(i => i.status !== 'want_to_read')
+      return [...others, ...reordered]
+    })
+    await Promise.all(
+      reordered.map((item, idx) => supabase.rpc('update_list_item_position', { p_item_id: item.id, p_position: idx }))
+    )
+  }
+  const { dragIdx, overIdx, nativeDragProps, handleBind, tileProps } = useDragReorder(wantToRead, persistOrder)
+
+  function renderSection(statusKey, title, icon, iconBg, list_, draggable = false) {
     if (list_.length === 0) return null
+    const focused = focusedStatus === statusKey
+    if (focusedStatus && !focused) return null
     return (
       <div style={{ marginBottom: 22 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+        <button onClick={() => setFocusedStatus(focused ? null : statusKey)} style={{
+          display: 'flex', alignItems: 'center', gap: 10, marginBottom: draggable ? 4 : 14,
+          background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: f.sans,
+        }}>
+          {focused && <span style={{ color: C.muted, fontSize: 15 }}>‹</span>}
           <SectionBadge icon={icon} bg={iconBg} />
           <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontWeight: 700, fontFamily: f.sans }}>{title}</h2>
           <CountPill n={list_.length} />
-        </div>
+          {!focused && <span style={{ color: C.muted, fontSize: 15 }}>›</span>}
+        </button>
+        {draggable && (
+          <p style={{ margin: '0 0 10px', fontSize: 11, color: C.muted, fontFamily: f.sans, fontStyle: 'italic' }}>
+            ⠿ Drag a cover to reorder
+          </p>
+        )}
         <div style={{
           display: 'grid',
           gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
           gap: isMobile ? 9 : 16,
         }}>
-          {list_.map(renderTile)}
+          {list_.map((item, idx) => renderTile(item, idx, draggable))}
         </div>
       </div>
     )
   }
 
-  function renderTile(item) {
+  function renderTile(item, idx, draggable = false) {
     const book = item.books || {}
     const isHovered = hoveredId === item.id
 
@@ -4974,11 +5132,28 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
 
     return (
       <div key={item.id}
+        {...(draggable ? tileProps(idx) : {})}
+        {...(draggable ? nativeDragProps(idx) : {})}
         onMouseEnter={() => setHoveredId(item.id)}
         onMouseLeave={() => setHoveredId(null)}
-        style={{ position: 'relative' }}
+        style={{
+          position: 'relative',
+          opacity: draggable && dragIdx === idx ? 0.4 : 1,
+          outline: draggable && overIdx === idx && dragIdx !== idx ? `2px solid ${C.primary}` : 'none',
+          borderRadius: draggable ? 10 : undefined,
+          cursor: draggable ? 'grab' : undefined,
+        }}
       >
         <PosterCard book={book} onClick={handleTap} />
+        {draggable && !isHovered && (
+          <div {...handleBind(idx)} style={{
+            ...handleBind(idx).style,
+            position: 'absolute', bottom: 4, right: 4, width: 28, height: 28, borderRadius: '50%',
+            background: 'rgba(10,8,24,0.75)', color: '#fff', fontSize: 14,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'grab', zIndex: 2, WebkitTapHighlightColor: 'transparent',
+          }}>⠿</div>
+        )}
         {isHovered && (
           <div onClick={() => setModal(book)} style={{
             position: 'absolute', inset: 0, borderRadius: 8,
@@ -5087,9 +5262,16 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
         <EmptyState icon="📋" message="Nothing on this list yet" sub="Add books to start planning" />
       ) : (
         <>
-          {renderSection('Reading', '▶', STATUS_COLORS.reading.color, reading)}
-          {renderSection('Want to Read', '👀', C.accent, wantToRead)}
-          {renderSection('Read', '✅', C.success, read)}
+          {focusedStatus && (
+            <button onClick={() => setFocusedStatus(null)} style={{
+              background: 'none', border: 'none', color: C.muted, fontFamily: f.sans,
+              fontSize: 13, cursor: 'pointer', padding: 0, marginBottom: 16,
+              display: 'flex', alignItems: 'center', gap: 4,
+            }}>‹ Back to all</button>
+          )}
+          {renderSection('reading', 'Reading', '▶', STATUS_COLORS.reading.color, reading)}
+          {renderSection('want_to_read', 'Want to Read', '👀', C.accent, wantToRead, true)}
+          {renderSection('read', 'Read', '✅', C.success, read)}
         </>
       )}
 
