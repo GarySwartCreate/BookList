@@ -5157,8 +5157,19 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
     const book = item.books || {}
     const isHovered = hoveredId === item.id
 
+    // Which quick status-change icons make sense from here — Read is a dead
+    // end (no further action needed), Reading only ever moves forward to
+    // Read, and Want to Read can jump to either Reading or Read.
+    const moveOptions =
+      item.status === 'read'    ? [] :
+      item.status === 'reading' ? [['read', STATUS_ICONS.read, STATUS_COLORS.read.color]] :
+      [
+        ['reading', STATUS_ICONS.reading, STATUS_COLORS.reading.color],
+        ['read',    STATUS_ICONS.read,    STATUS_COLORS.read.color],
+      ]
+
     function handleTap() {
-      if (isMobile && !isHovered) {
+      if (isMobile && !isHovered && moveOptions.length > 0) {
         setHoveredId(item.id)
         clearTimeout(hideTimerRef.current)
         hideTimerRef.current = setTimeout(() => setHoveredId(null), 2500)
@@ -5191,7 +5202,7 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
             cursor: 'grab', zIndex: 2, WebkitTapHighlightColor: 'transparent',
           }}>⠿</div>
         )}
-        {isHovered && (
+        {isHovered && moveOptions.length > 0 && (
           <div onClick={() => setModal(book)} style={{
             position: 'absolute', inset: 0, borderRadius: 8,
             background: 'rgba(10,8,24,0.72)',
@@ -5203,29 +5214,16 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
               Move to:
             </p>
             <div style={{ display: 'flex', gap: 6 }}>
-              {[
-                ['reading', STATUS_ICONS.reading, STATUS_COLORS.reading.color],
-                ['want_to_read', STATUS_ICONS.want_to_read, STATUS_COLORS.want_to_read.color],
-                ['read', STATUS_ICONS.read, STATUS_COLORS.read.color],
-              ].map(([st, icon, bg]) => (
-                <button key={st} title={STATUS_LABELS[st]} disabled={item.status === st}
+              {moveOptions.map(([st, icon, bg]) => (
+                <button key={st} title={STATUS_LABELS[st]}
                   onClick={(e) => { e.stopPropagation(); handleStatusChange(item, st) }}
                   style={{
                     width: 28, height: 28, borderRadius: '50%', border: 'none',
-                    background: item.status === st ? C.surface2 : bg,
-                    color: item.status === st ? C.muted : '#0f1117',
-                    cursor: item.status === st ? 'default' : 'pointer', fontSize: 12,
+                    background: bg, color: '#0f1117',
+                    cursor: 'pointer', fontSize: 12,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    opacity: item.status === st ? 0.5 : 1,
                   }}>{icon}</button>
               ))}
-              <button title="Remove from list"
-                onClick={(e) => { e.stopPropagation(); handleRemove(item) }}
-                style={{
-                  width: 28, height: 28, borderRadius: '50%', border: 'none',
-                  background: '#3d1f1f', color: '#ff7070', cursor: 'pointer', fontSize: 12, fontWeight: 700,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>✕</button>
             </div>
           </div>
         )}
