@@ -5299,7 +5299,7 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
             {[
               ['all',          'All',          items.length],
               ['reading',      'Reading',      reading.length],
-              ['want_to_read', 'Want to Read', wantToRead.length],
+              ['want_to_read', 'Recommended', wantToRead.length],
               ['read',         'Read',         read.length],
             ].map(([key, label, count]) => (
               <button key={key} onClick={() => setFilterStatus(key)} style={{ ...pill(filterStatus === key), fontSize: 13 }}>
