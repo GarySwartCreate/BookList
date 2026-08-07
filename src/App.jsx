@@ -5117,13 +5117,26 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
   }, [list.id, list.owner_id])
 
   async function handleStatusChange(item, status) {
+    const prevStatus = item.status
     setItems(prev => prev.map(i => i.id === item.id ? { ...i, status } : i))
-    await supabase.rpc('update_list_item_status', { p_item_id: item.id, p_status: status })
+    const { error } = await supabase.rpc('update_list_item_status', { p_item_id: item.id, p_status: status })
+    if (error) {
+      // Roll back the optimistic update if the write actually failed, instead
+      // of silently leaving the UI showing a status the database doesn't have.
+      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: prevStatus } : i))
+      alert(error.message)
+    }
   }
 
   async function handleRemove(item) {
     setItems(prev => prev.filter(i => i.id !== item.id))
-    await supabase.rpc('remove_list_item', { p_item_id: item.id })
+    const { error } = await supabase.rpc('remove_list_item', { p_item_id: item.id })
+    if (error) {
+      // Removing is meant to be low-stakes (you can always add it back), but
+      // if the write actually failed, don't leave it silently missing.
+      setItems(prev => [...prev, item])
+      alert(error.message)
+    }
   }
 
   const reading     = items.filter(i => i.status === 'reading')
@@ -5167,7 +5180,7 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
       ]
 
     function handleTap() {
-      if (isMobile && !isHovered && moveOptions.length > 0) {
+      if (isMobile && !isHovered) {
         setHoveredId(item.id)
         clearTimeout(hideTimerRef.current)
         hideTimerRef.current = setTimeout(() => setHoveredId(null), 2500)
@@ -5200,7 +5213,7 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
             cursor: 'grab', zIndex: 2, WebkitTapHighlightColor: 'transparent',
           }}>⠿</div>
         )}
-        {isHovered && moveOptions.length > 0 && (
+        {isHovered && (
           <div onClick={() => setModal(book)} style={{
             position: 'absolute', inset: 0, borderRadius: 8,
             background: 'rgba(10,8,24,0.72)',
@@ -5208,9 +5221,11 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
             alignItems: 'center', justifyContent: 'flex-end',
             gap: 8, padding: '10px 8px 14px',
           }}>
-            <p style={{ margin: 0, fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.85)', fontFamily: f.sans }}>
-              Move to:
-            </p>
+            {moveOptions.length > 0 && (
+              <p style={{ margin: 0, fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.85)', fontFamily: f.sans }}>
+                Move to:
+              </p>
+            )}
             <div style={{ display: 'flex', gap: 6 }}>
               {moveOptions.map(([st, icon, bg]) => (
                 <button key={st} title={STATUS_LABELS[st]}
@@ -5222,6 +5237,13 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}>{icon}</button>
               ))}
+              <button title="Remove from list"
+                onClick={(e) => { e.stopPropagation(); handleRemove(item) }}
+                style={{
+                  width: 28, height: 28, borderRadius: '50%', border: 'none',
+                  background: '#3d1f1f', color: '#ff7070', cursor: 'pointer', fontSize: 12, fontWeight: 700,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>✕</button>
             </div>
           </div>
         )}
