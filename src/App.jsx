@@ -5080,12 +5080,12 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
   const [loading,       setLoading]      = useState(true)
   const [modal,         setModal]        = useState(null)
   const [hoveredId,     setHoveredId]    = useState(null)
-  const [showAdd,       setShowAdd]      = useState(null) // null | 'reading' | 'want_to_read'
+  const [showAdd,       setShowAdd]      = useState(false)
   const [showShare,     setShowShare]    = useState(false)
   const [showMembers,   setShowMembers]  = useState(false)
   const [members,       setMembers]      = useState([])
   const [ownerProfile,  setOwnerProfile] = useState(null)
-  const [focusedStatus, setFocusedStatus] = useState(null) // null | 'reading' | 'want_to_read' | 'read'
+  const [filterStatus,  setFilterStatus] = useState('all') // 'all' | 'reading' | 'want_to_read' | 'read'
   const hideTimerRef = useRef(null)
   useEffect(() => () => clearTimeout(hideTimerRef.current), [])
 
@@ -5130,9 +5130,10 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
   const wantToRead  = items.filter(i => i.status === 'want_to_read')
   const read        = items.filter(i => i.status === 'read')
 
-  // Drag-to-reorder — Want to Read section, same press-and-hold pattern
-  // (native HTML5 DnD on desktop, grip-handle pointer drag on mobile) used
-  // for the personal library's Want to Read row on Home.
+  // Drag-to-reorder only makes sense within the Want to Read queue, so it's
+  // only active when that's the selected filter — same press-and-hold pattern
+  // (native HTML5 DnD on desktop, grip-handle pointer drag on mobile) used for
+  // the personal library's Want to Read row on Home.
   async function persistOrder(reordered) {
     setItems(prev => {
       const others = prev.filter(i => i.status !== 'want_to_read')
@@ -5144,38 +5145,11 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
   }
   const { dragIdx, overIdx, nativeDragProps, handleBind, tileProps } = useDragReorder(wantToRead, persistOrder)
 
-  function renderSection(statusKey, title, icon, iconBg, list_, draggable = false, onAdd = null) {
-    if (list_.length === 0 && !onAdd) return null
-    const focused = focusedStatus === statusKey
-    if (focusedStatus && !focused) return null
-    return (
-      <div style={{ marginBottom: 22 }}>
-        <button onClick={() => setFocusedStatus(focused ? null : statusKey)} style={{
-          display: 'flex', alignItems: 'center', gap: 10, marginBottom: draggable ? 4 : 14,
-          background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: f.sans,
-        }}>
-          {focused && <span style={{ color: C.muted, fontSize: 15 }}>‹</span>}
-          <SectionBadge icon={icon} bg={iconBg} />
-          <h2 style={{ margin: 0, color: C.text, fontSize: 18, fontWeight: 700, fontFamily: f.sans }}>{title}</h2>
-          <CountPill n={list_.length} />
-          {!focused && <span style={{ color: C.muted, fontSize: 15 }}>›</span>}
-        </button>
-        {draggable && list_.length > 0 && (
-          <p style={{ margin: '0 0 10px', fontSize: 11, color: C.muted, fontFamily: f.sans, fontStyle: 'italic' }}>
-            ⠿ Drag a cover to reorder
-          </p>
-        )}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
-          gap: isMobile ? 9 : 16,
-        }}>
-          {onAdd && <AddTile onClick={onAdd} label="Add Book" />}
-          {list_.map((item, idx) => renderTile(item, idx, draggable))}
-        </div>
-      </div>
-    )
-  }
+  const visibleItems =
+    filterStatus === 'all'          ? items :
+    filterStatus === 'want_to_read' ? wantToRead :
+    filterStatus === 'reading'      ? reading : read
+  const draggableView = filterStatus === 'want_to_read'
 
   function renderTile(item, idx, draggable = false) {
     const book = item.books || {}
@@ -5276,7 +5250,7 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
           {isOwner && (
             <button onClick={() => setShowShare(true)} style={btn('subtle', 'sm')}>+ Share</button>
           )}
-          <button onClick={() => setShowAdd('want_to_read')} style={btn('accent', 'sm')}>+ Add Book</button>
+          <button onClick={() => setShowAdd(true)} style={btn('accent', 'sm')}>+ Add Book</button>
         </div>
       </div>
 
@@ -5317,26 +5291,45 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
         </div>
       )}
 
-      {loading ? <Spinner /> : (
+      {loading ? <Spinner /> : items.length === 0 ? (
+        <EmptyState icon="📋" message="Nothing on this list yet" sub="Add books to start planning" />
+      ) : (
         <>
-          {focusedStatus && (
-            <button onClick={() => setFocusedStatus(null)} style={{
-              background: 'none', border: 'none', color: C.muted, fontFamily: f.sans,
-              fontSize: 13, cursor: 'pointer', padding: 0, marginBottom: 16,
-              display: 'flex', alignItems: 'center', gap: 4,
-            }}>‹ Back to all</button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
+            {[
+              ['all',          'All',          items.length],
+              ['reading',      'Reading',      reading.length],
+              ['want_to_read', 'Want to Read', wantToRead.length],
+              ['read',         'Read',         read.length],
+            ].map(([key, label, count]) => (
+              <button key={key} onClick={() => setFilterStatus(key)} style={{ ...pill(filterStatus === key), fontSize: 13 }}>
+                {label} <span style={{ opacity: 0.75 }}>({count})</span>
+              </button>
+            ))}
+          </div>
+
+          {draggableView && wantToRead.length > 0 && (
+            <p style={{ margin: '0 0 10px', fontSize: 11, color: C.muted, fontFamily: f.sans, fontStyle: 'italic' }}>
+              ⠿ Drag a cover to reorder
+            </p>
           )}
-          {renderSection('reading', 'Reading', '▶', STATUS_COLORS.reading.color, reading, false, () => setShowAdd('reading'))}
-          {renderSection('want_to_read', 'Want to Read', '👀', C.accent, wantToRead, true, () => setShowAdd('want_to_read'))}
-          {renderSection('read', 'Read', '✅', C.success, read)}
+
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
+            gap: isMobile ? 9 : 16,
+          }}>
+            <AddTile onClick={() => setShowAdd(true)} label="Add Book" />
+            {visibleItems.map((item, idx) => renderTile(item, idx, draggableView))}
+          </div>
         </>
       )}
 
       {showAdd && (
         <AddToListModal list={list} userId={userId}
           existingBookIds={new Set(items.map(i => i.book_id))}
-          initialStatus={showAdd}
-          onClose={() => setShowAdd(null)}
+          initialStatus={filterStatus === 'all' ? 'want_to_read' : filterStatus}
+          onClose={() => setShowAdd(false)}
           onAdded={() => { loadItems(); onListChanged?.() }} />
       )}
 
