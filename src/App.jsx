@@ -1327,11 +1327,15 @@ function ActionBox({ icon, label, badge, sub, active, activeColor, danger, onCli
   )
 }
 
-function BookDetailModal({ item, userId, onClose, onUpdate }) {
+function BookDetailModal({ item, userId, onClose, onUpdate, listItem }) {
   const isMobile = useIsMobile()
   const isLibraryBook = !!item?.user_id
   const book = isLibraryBook ? (item.books || {}) : item
   const userBook = isLibraryBook ? item : null
+  // When opened from a shared list's tile, `listItem` carries that list
+  // item's own status + handlers — status changes and removal need to act
+  // on the list item (book_list_items), not this user's personal shelf.
+  const inList = !!listItem
 
   const [status,       setStatus]       = useState(userBook?.status || '')
   const [rating,       setRating]       = useState(userBook?.rating || null)
@@ -1706,6 +1710,15 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
     onClose()
   }
 
+  function handleRemoveClick() {
+    if (inList) {
+      listItem.onRemove()
+      onClose()
+    } else {
+      handleRemove()
+    }
+  }
+
   return (
     <>
     {showRating && (
@@ -1813,13 +1826,16 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
           fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>×</button>
 
-        {/* Status — pinned to top, in line with close button */}
+        {/* Status — pinned to top, in line with close button. In list mode
+            this reflects and updates the shared list item's status, not
+            this user's personal shelf. */}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18, paddingRight: 40 }}>
           {Object.entries(STATUS_LABELS).map(([key, lbl]) => {
-            const active = status === key
+            const label = inList && key === 'want_to_read' ? 'Recommended' : lbl
+            const active = inList ? listItem.status === key : status === key
             const sc = STATUS_COLORS[key]
             return (
-              <button key={key} onClick={() => handleStatusChange(key)}
+              <button key={key} onClick={() => inList ? listItem.onStatusChange(key) : handleStatusChange(key)}
                 style={{
                   cursor: 'pointer', fontFamily: f.sans, fontSize: 12, fontWeight: 700,
                   padding: '6px 12px', borderRadius: 20, transition: 'all 0.15s',
@@ -1827,7 +1843,7 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
                   background: active ? sc.color : C.surface2,
                   color: active ? '#0f1117' : C.muted,
                 }}>
-                {STATUS_ICONS[key]} {lbl}
+                {STATUS_ICONS[key]} {label}
               </button>
             )
           })}
@@ -1939,7 +1955,7 @@ function BookDetailModal({ item, userId, onClose, onUpdate }) {
             active={showSharePanel} onClick={() => setShowSharePanel(o => !o)} />
           <ActionBox icon={top10 ? '🏆' : '⭐'} label={top10 ? 'Faved' : 'Fave'}
             active={top10} activeColor={C.accent} onClick={handleToggleTop10} />
-          <ActionBox icon="🗑" label="Remove" danger onClick={handleRemove} />
+          <ActionBox icon="🗑" label={inList ? 'Remove from list' : 'Remove'} danger onClick={handleRemoveClick} />
         </div>
 
         {msg && (
@@ -4812,6 +4828,10 @@ function ShareListModal({ list, userId, friends, onClose }) {
             })}
           </div>
         )}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+          <button onClick={onClose} style={btn('accent', 'sm')}>✓ Done</button>
+        </div>
       </div>
     </div>
   )
@@ -4820,7 +4840,7 @@ function ShareListModal({ list, userId, friends, onClose }) {
 // ================================================================
 // AddToListModal – search + add books directly onto a shared list
 // ================================================================
-function AddToListModal({ list, userId, existingBookIds, initialStatus = 'want_to_read', onClose, onAdded }) {
+function AddToListModal({ list, userId, existingBookIds, onClose, onAdded }) {
   const isMobile = useIsMobile()
   const [query,     setQuery]     = useState('')
   const [results,   setResults]   = useState([])
@@ -4847,12 +4867,12 @@ function AddToListModal({ list, userId, existingBookIds, initialStatus = 'want_t
     return () => clearTimeout(debounceRef.current)
   }, [query])
 
-  async function handleAdd(book) {
+  async function handleAdd(book, status) {
     setAddingId(book.id)
     try {
       await upsertBook(book)
       const { error } = await supabase.rpc('add_book_to_list', {
-        p_list_id: list.id, p_book_id: book.id, p_status: initialStatus,
+        p_list_id: list.id, p_book_id: book.id, p_status: status,
       })
       if (error) throw error
       onAdded?.(book.id)
@@ -4900,6 +4920,12 @@ function AddToListModal({ list, userId, existingBookIds, initialStatus = 'want_t
           )}
         </div>
 
+        {results.length > 0 && (
+          <p style={{ margin: '0 0 10px', fontSize: 11, color: C.muted, fontFamily: f.sans, fontStyle: 'italic', flexShrink: 0 }}>
+            Tap a status to add — {STATUS_ICONS.want_to_read} Recommend · {STATUS_ICONS.reading} Reading · {STATUS_ICONS.read} Read
+          </p>
+        )}
+
         <div style={{ overflowY: 'auto' }}>
           {searching ? <Spinner /> : err ? (
             <p style={{ color: C.danger, fontFamily: f.sans, fontSize: 13 }}>{err}</p>
@@ -4933,10 +4959,25 @@ function AddToListModal({ list, userId, existingBookIds, initialStatus = 'want_t
                     ✓ On list
                   </span>
                 ) : (
-                  <button onClick={() => handleAdd(book)} disabled={!!addingId}
-                    style={{ ...btn('accent', 'sm'), fontSize: 12, flexShrink: 0, opacity: addingId && addingId !== book.id ? 0.5 : 1 }}>
-                    {addingId === book.id ? '…' : '+ Add'}
-                  </button>
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    {[
+                      ['want_to_read', STATUS_ICONS.want_to_read, STATUS_COLORS.want_to_read.color, 'Recommend'],
+                      ['reading',      STATUS_ICONS.reading,      STATUS_COLORS.reading.color,      'Reading'],
+                      ['read',         STATUS_ICONS.read,         STATUS_COLORS.read.color,         'Read'],
+                    ].map(([st, icon, bg, label]) => (
+                      <button key={st} title={label} disabled={!!addingId}
+                        onClick={() => handleAdd(book, st)}
+                        style={{
+                          width: 28, height: 28, borderRadius: '50%', border: 'none',
+                          background: bg, color: '#0f1117', fontSize: 12,
+                          cursor: addingId ? 'not-allowed' : 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          opacity: addingId && addingId !== book.id ? 0.5 : 1,
+                        }}>
+                        {addingId === book.id ? '…' : icon}
+                      </button>
+                    ))}
+                  </div>
                 )}
               </div>
             )
@@ -5101,20 +5142,22 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
 
   useEffect(() => { loadItems() }, [loadItems])
 
-  useEffect(() => {
-    // book_list_shares.user_id references auth.users, not profiles — no FK for
-    // PostgREST to auto-embed, so fetch profiles separately and merge in JS.
-    supabase.from('book_list_shares').select('user_id').eq('list_id', list.id)
-      .then(async ({ data: shares }) => {
-        const shareIds = (shares || []).map(s => s.user_id)
-        const allIds = [...new Set([list.owner_id, ...shareIds])]
-        const { data: profs } = await supabase.from('profiles')
-          .select('id, display_name, username, avatar_url').in('id', allIds)
-        const profileMap = Object.fromEntries((profs || []).map(p => [p.id, p]))
-        setOwnerProfile(profileMap[list.owner_id] || null)
-        setMembers(shareIds.map(id => ({ user_id: id, profiles: profileMap[id] })))
-      })
+  // book_list_shares.user_id references auth.users, not profiles — no FK for
+  // PostgREST to auto-embed, so fetch profiles separately and merge in JS.
+  // Pulled out to a named function so it can be re-run after Share closes,
+  // instead of only ever loading once on mount.
+  const loadMembers = useCallback(async () => {
+    const { data: shares } = await supabase.from('book_list_shares').select('user_id').eq('list_id', list.id)
+    const shareIds = (shares || []).map(s => s.user_id)
+    const allIds = [...new Set([list.owner_id, ...shareIds])]
+    const { data: profs } = await supabase.from('profiles')
+      .select('id, display_name, username, avatar_url').in('id', allIds)
+    const profileMap = Object.fromEntries((profs || []).map(p => [p.id, p]))
+    setOwnerProfile(profileMap[list.owner_id] || null)
+    setMembers(shareIds.map(id => ({ user_id: id, profiles: profileMap[id] })))
   }, [list.id, list.owner_id])
+
+  useEffect(() => { loadMembers() }, [loadMembers])
 
   async function handleStatusChange(item, status) {
     const prevStatus = item.status
@@ -5186,7 +5229,7 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
         hideTimerRef.current = setTimeout(() => setHoveredId(null), 2500)
         return
       }
-      setModal(book)
+      setModal(item)
     }
 
     return (
@@ -5214,7 +5257,7 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
           }}>⠿</div>
         )}
         {isHovered && (
-          <div onClick={() => setModal(book)} style={{
+          <div onClick={() => setModal(item)} style={{
             position: 'absolute', inset: 0, borderRadius: 8,
             background: 'rgba(10,8,24,0.72)',
             display: 'flex', flexDirection: 'column',
@@ -5350,19 +5393,27 @@ function ListDetailView({ list, userId, friends, myBookIds, onBack, onListChange
       {showAdd && (
         <AddToListModal list={list} userId={userId}
           existingBookIds={new Set(items.map(i => i.book_id))}
-          initialStatus={filterStatus === 'all' ? 'want_to_read' : filterStatus}
           onClose={() => setShowAdd(false)}
           onAdded={() => { loadItems(); onListChanged?.() }} />
       )}
 
       {showShare && (
-        <ShareListModal list={list} userId={userId} friends={friends} onClose={() => setShowShare(false)} />
+        <ShareListModal list={list} userId={userId} friends={friends}
+          onClose={() => { setShowShare(false); loadMembers() }} />
       )}
 
       {modal && (
-        <BookDetailModal item={modal} userId={userId}
+        <BookDetailModal item={modal.books || {}} userId={userId}
           onClose={() => setModal(null)}
-          onUpdate={() => {}} />
+          onUpdate={() => {}}
+          listItem={{
+            status: modal.status,
+            onStatusChange: (st) => {
+              handleStatusChange(modal, st)
+              setModal(prev => prev ? { ...prev, status: st } : prev)
+            },
+            onRemove: () => handleRemove(modal),
+          }} />
       )}
     </div>
   )
