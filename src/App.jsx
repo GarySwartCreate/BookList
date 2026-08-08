@@ -2718,6 +2718,7 @@ function HomePage({ userId, onOpenList }) {
   const [showReadFilter, setShowReadFilter] = useState(false)
   const [readSort,     setReadSort]     = useState('default')
   const [readGenre,    setReadGenre]    = useState('all')
+  const [readFavOnly,  setReadFavOnly]  = useState(false)
   const [expandRead,   setExpandRead]   = useState(false) // collapsed to one row by default; count/filter expand it
 
   const loadHomeData = useCallback(async () => {
@@ -2737,13 +2738,17 @@ function HomePage({ userId, onOpenList }) {
   const readAll = myBooks.filter(u => u.status === 'read')
   const readGenres = useMemo(() => topCategories(readAll.map(u => u.books || {})), [myBooks])
   const read = (() => {
-    const list = readGenre === 'all' ? readAll : readAll.filter(u => bookGenres(u.books).includes(readGenre))
+    let list = readGenre === 'all' ? readAll : readAll.filter(u => bookGenres(u.books).includes(readGenre))
+    if (readFavOnly) list = list.filter(u => u.top_10)
     if (readSort === 'recent') return list // already fetched in updated_at desc order
     if (readSort === 'top_rated') return [...list].sort((a, b) => (b.rating || 0) - (a.rating || 0))
-    // 'default' — Top 10 picks first, then by rating descending
+    // 'default' — favorites first, then by rating descending, then most
+    // recent first as the tiebreaker within a rating (e.g. all the 5-star ones).
     return [...list].sort((a, b) => {
       if (!!b.top_10 !== !!a.top_10) return b.top_10 ? 1 : -1
-      return (b.rating || 0) - (a.rating || 0)
+      const aRating = a.rating || 0, bRating = b.rating || 0
+      if (aRating !== bRating) return bRating - aRating
+      return new Date(b.updated_at) - new Date(a.updated_at)
     })
   })()
 
@@ -2866,6 +2871,9 @@ function HomePage({ userId, onOpenList }) {
                     {lbl}
                   </button>
                 ))}
+                <button onClick={() => setReadFavOnly(o => !o)} style={{ ...pill(readFavOnly), fontSize: 12 }}>
+                  🏆 Favorites
+                </button>
               </div>
               {readGenres.length > 0 && (
                 <>
@@ -3553,7 +3561,9 @@ function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack
   function sortDefault(list) {
     return [...list].sort((a, b) => {
       if (!!b.top_10 !== !!a.top_10) return b.top_10 ? 1 : -1
-      return (b.rating || 0) - (a.rating || 0)
+      const aRating = a.rating || 0, bRating = b.rating || 0
+      if (aRating !== bRating) return bRating - aRating
+      return new Date(b.updated_at) - new Date(a.updated_at)
     })
   }
   // Sort: Top 10 first, then by rating desc — except in drag-reorder queue mode
@@ -3765,7 +3775,9 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, myBook
     if (readSort === 'top_rated') return [...list].sort((a, b) => (b.rating || 0) - (a.rating || 0))
     return [...list].sort((a, b) => {
       if (!!b.top_10 !== !!a.top_10) return b.top_10 ? 1 : -1
-      return (b.rating || 0) - (a.rating || 0)
+      const aRating = a.rating || 0, bRating = b.rating || 0
+      if (aRating !== bRating) return bRating - aRating
+      return new Date(b.updated_at) - new Date(a.updated_at)
     })
   })()
 
@@ -5644,7 +5656,9 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
     if (bookSort === 'recent') return list // already fetched updated_at desc
     return [...list].sort((a, b) => {
       if (!!b.top_10 !== !!a.top_10) return b.top_10 ? 1 : -1
-      return (b.rating || 0) - (a.rating || 0)
+      const aRating = a.rating || 0, bRating = b.rating || 0
+      if (aRating !== bRating) return bRating - aRating
+      return new Date(b.updated_at) - new Date(a.updated_at)
     })
   })()
 
