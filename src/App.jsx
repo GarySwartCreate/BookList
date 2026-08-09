@@ -635,6 +635,18 @@ function StarRating({ value, onChange, readonly = false, size = 16 }) {
   )
 }
 
+// Outline paper-plane / "send" icon — replaces the ✈️ emoji everywhere so
+// the send/share/messages affordance looks the same across platforms.
+function PlaneIcon({ size = 16, color = 'currentColor', style }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color}
+      strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={style}>
+      <line x1="22" y1="2" x2="11" y2="13" />
+      <polygon points="22 2 15 22 11 13 2 9 22 2" />
+    </svg>
+  )
+}
+
 function NoCover({ title, width = 120, height = 180 }) {
   return (
     <div style={{
@@ -2009,6 +2021,12 @@ function BookDetailModal({ item, userId, onClose, onUpdate, listItem }) {
                 ))}
               </div>
             )}
+
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
+              <button onClick={shareBookLink} style={{ ...btn('subtle', 'sm'), width: '100%', justifyContent: 'center' }}>
+                {linkCopied ? '🔗 Link copied — paste it anywhere!' : '↗ Share outside the app'}
+              </button>
+            </div>
           </div>
         )}
 
@@ -4555,9 +4573,9 @@ function FriendsPage({ userId }) {
                     title="Send a book"
                     style={{
                       width: 32, height: 32, borderRadius: '50%', border: `1px solid ${C.border}`,
-                      background: C.surface2, color: C.primary, cursor: 'pointer', fontSize: 14,
+                      background: C.surface2, color: C.primary, cursor: 'pointer',
                       display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                    }}>✈️</button>
+                    }}><PlaneIcon size={15} /></button>
                   <button onClick={() => remove(f.id)}
                     title="Unfriend"
                     style={{
@@ -6695,7 +6713,9 @@ function MessagesModal({ userId, onClose }) {
         border: `1px solid ${C.border}`, boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-          <h3 style={{ margin: 0, color: C.text, fontFamily: f.serif, fontSize: 18 }}>✈️ Messages</h3>
+          <h3 style={{ margin: 0, color: C.text, fontFamily: f.serif, fontSize: 18, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <PlaneIcon size={17} /> Messages
+          </h3>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 20, cursor: 'pointer' }}>×</button>
         </div>
         <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
@@ -6704,7 +6724,8 @@ function MessagesModal({ userId, onClose }) {
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {list === null ? <Spinner /> : list.length === 0
-            ? <EmptyState icon="✈️" message={tab === 'received' ? 'No books sent to you yet' : "You haven't sent any books yet"}
+            ? <EmptyState icon={<PlaneIcon size={48} style={{ display: 'inline-block' }} />}
+                message={tab === 'received' ? 'No books sent to you yet' : "You haven't sent any books yet"}
                 sub="Send a book to a friend from the Friends tab" />
             : list.map(rec => (
               <div key={rec.id} style={{
@@ -6778,7 +6799,9 @@ function Nav({ view, setView, userId, onAddClick, onActivityClick, onMessagesCli
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <button onClick={onAddClick} title="Add a book" style={iconBtn}>+</button>
           <button onClick={onActivityClick} title="Activity" style={iconBtn}>🔔</button>
-          <button onClick={onMessagesClick} title="Messages" style={{ ...iconBtn, fontSize: 16 }}>✈️</button>
+          <button onClick={onMessagesClick} title="Messages" style={iconBtn}>
+            <PlaneIcon size={17} />
+          </button>
         </div>
       </div>
 
