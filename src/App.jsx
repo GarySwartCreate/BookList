@@ -634,22 +634,47 @@ function StatusBadge({ status, size = 'sm' }) {
   )
 }
 
+// Supports half-star increments (1, 1.5, 2 ... 5). Each star is a stack of
+// an outline star (background) and a color-filled star clipped to the fill
+// fraction (0%, 50%, or 100%) — clicking the left/right half of a star picks
+// the half-down or whole value.
 function StarRating({ value, onChange, readonly = false, size = 16 }) {
   const [hover, setHover] = useState(0)
+  const display = hover || value || 0
+
+  function valueFromEvent(e, n) {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const isLeftHalf = (e.clientX - rect.left) < rect.width / 2
+    return isLeftHalf ? n - 0.5 : n
+  }
+
   return (
     <span style={{ display: 'inline-flex', gap: 2 }}>
-      {[1,2,3,4,5].map(n => (
-        <span key={n}
-          onClick={() => !readonly && onChange?.(n === value ? null : n)}
-          onMouseEnter={() => !readonly && setHover(n)}
-          onMouseLeave={() => !readonly && setHover(0)}
-          style={{
-            fontSize: size, lineHeight: 1, userSelect: 'none',
-            cursor: readonly ? 'default' : 'pointer',
-            color: n <= (hover || value || 0) ? C.star : C.border,
-            transition: 'color 0.1s',
-          }}>★</span>
-      ))}
+      {[1,2,3,4,5].map(n => {
+        const fill = Math.max(0, Math.min(1, display - (n - 1)))
+        return (
+          <span key={n}
+            onClick={e => {
+              if (readonly) return
+              const picked = valueFromEvent(e, n)
+              onChange?.(picked === value ? null : picked)
+            }}
+            onMouseMove={e => !readonly && setHover(valueFromEvent(e, n))}
+            onMouseLeave={() => !readonly && setHover(0)}
+            style={{
+              position: 'relative', display: 'inline-block',
+              fontSize: size, lineHeight: 1, userSelect: 'none',
+              cursor: readonly ? 'default' : 'pointer',
+              color: C.border,
+            }}>
+            ★
+            <span style={{
+              position: 'absolute', top: 0, left: 0, overflow: 'hidden',
+              width: `${fill * 100}%`, color: C.star, transition: 'width 0.1s',
+            }}>★</span>
+          </span>
+        )
+      })}
     </span>
   )
 }
@@ -4201,7 +4226,7 @@ function RecommendPopover({ userId, friend, onClose }) {
                     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                   }}>{ub.books?.title}</span>
                   {ub.rating > 0 && (
-                    <span style={{ fontSize: 11, color: C.star, flexShrink: 0 }}>{'★'.repeat(ub.rating)}</span>
+                    <span style={{ flexShrink: 0 }}><StarRating value={ub.rating} readonly size={11} /></span>
                   )}
                 </div>
                 {sentId === ub.books?.id
@@ -4226,6 +4251,7 @@ const FRIEND_STATUS_FILTERS = [
   ['highly_rated', '⭐ Highly Rated'],
   ['favorites',    '🏆 Favorites'],
   ['recent',       '🕐 Recent'],
+  ['date_read',    '📅 Date Read'],
 ]
 
 function FriendsPage({ userId }) {
@@ -4417,8 +4443,10 @@ function FriendsPage({ userId }) {
     if (statusFilter === 'highly_rated') return (ub.rating || 0) >= 4
     if (statusFilter === 'favorites') return !!ub.top_10
     if (statusFilter === 'recent') return true // already sorted by updated_at desc
+    if (statusFilter === 'date_read') return ub.status === 'read'
     return ub.status === statusFilter
   }).sort((a, b) => {
+    if (statusFilter === 'date_read') return byDateReadDesc(a, b)
     // Default order: Top 10 picks first, then highest rated, then most recent.
     if (!!b.top_10 !== !!a.top_10) return b.top_10 ? 1 : -1
     const aRating = a.rating || 0, bRating = b.rating || 0
@@ -6619,10 +6647,18 @@ function relativeTime(iso) {
 // Just the action clause — the book title itself is always rendered as its
 // own bold, clickable line below (see ActivityFeedModal), so this shouldn't
 // repeat it.
+// Plain-text star string for non-JSX contexts (activity feed, etc.) — supports
+// half-star ratings using ⯨ for the half, since String.repeat needs an integer.
+function starsText(rating) {
+  const whole = Math.floor(rating)
+  const half = rating - whole >= 0.5 ? 1 : 0
+  return '★'.repeat(whole) + (half ? '⯨' : '')
+}
+
 function activityAction(row) {
   if (row.kind === 'recommendation') return 'recommended this to you'
   const status = row.status, rating = row.rating
-  if (status === 'read') return rating ? `just read this and rated it ${'★'.repeat(rating)}` : 'just finished reading this'
+  if (status === 'read') return rating ? `just read this and rated it ${starsText(rating)}` : 'just finished reading this'
   if (status === 'reading')      return 'started reading this'
   if (status === 'want_to_read') return 'wants to read this'
   return 'updated this'
