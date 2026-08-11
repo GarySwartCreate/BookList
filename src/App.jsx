@@ -3,7 +3,7 @@
 // Stack: React + Vite + Supabase + Vercel  (single-file)
 // Dark cinematic theme · Poster grid · Horizontal scroll rows
 // ================================================================
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
 // ─── Supabase client ─────────────────────────────────────────────
@@ -2820,6 +2820,33 @@ function byDateReadDesc(a, b) {
   return a.finished_at < b.finished_at ? 1 : a.finished_at > b.finished_at ? -1 : 0
 }
 
+// Splits an already-date_read-sorted list into year buckets (most recent
+// first), Apple-Photos-style — books with no finished_at land in a trailing
+// "No Date" bucket. Assumes the list is pre-sorted via byDateReadDesc, so
+// this just watches for the year to change rather than re-sorting.
+function groupByReadYear(list) {
+  const groups = []
+  let currentYear
+  for (const item of list) {
+    const year = item.finished_at ? item.finished_at.slice(0, 4) : 'No Date'
+    if (year !== currentYear) { groups.push([year, []]); currentYear = year }
+    groups[groups.length - 1][1].push(item)
+  }
+  return groups
+}
+
+// Full-width section label dropped into a CSS grid between year groups
+function YearHeader({ year }) {
+  return (
+    <div style={{
+      gridColumn: '1 / -1', fontSize: 15, fontWeight: 800, color: C.text, fontFamily: f.sans,
+      margin: '18px 0 2px', paddingBottom: 6, borderBottom: `1px solid ${C.border}`,
+    }}>
+      {year === 'No Date' ? 'No Date' : year}
+    </div>
+  )
+}
+
 function HomePage({ userId, onOpenList }) {
   const isMobile = useIsMobile()
   const [myBooks,      setMyBooks]      = useState([])
@@ -3013,10 +3040,20 @@ function HomePage({ userId, onOpenList }) {
               gap: isMobile ? 9 : 16,
             }}>
               <AddTile onClick={() => setShowAdd('read')} label="Add Book" />
-              {read.map(ub => (
-                <PosterCard key={ub.id} userBook={ub}
-                  onClick={() => setModal({ type: 'library', userBook: ub })} />
-              ))}
+              {readSort === 'date_read'
+                ? groupByReadYear(read).map(([year, items]) => (
+                    <Fragment key={year}>
+                      <YearHeader year={year} />
+                      {items.map(ub => (
+                        <PosterCard key={ub.id} userBook={ub}
+                          onClick={() => setModal({ type: 'library', userBook: ub })} />
+                      ))}
+                    </Fragment>
+                  ))
+                : read.map(ub => (
+                    <PosterCard key={ub.id} userBook={ub}
+                      onClick={() => setModal({ type: 'library', userBook: ub })} />
+                  ))}
             </div>
           )}
         </div>
@@ -3784,7 +3821,16 @@ function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack
             gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
             gap: isMobile ? 9 : 16,
           }}>
-            {visible.map((ub, idx) => (
+            {filter === 'read' && readSort === 'date_read'
+              ? groupByReadYear(visible).map(([year, items]) => (
+                  <Fragment key={year}>
+                    <YearHeader year={year} />
+                    {items.map(ub => (
+                      <PosterCard key={ub.id} userBook={ub} onClick={() => setModal(ub)} />
+                    ))}
+                  </Fragment>
+                ))
+              : visible.map((ub, idx) => (
               <div key={ub.id}
                 {...(isQueue ? tileProps(idx) : {})}
                 {...(isQueue ? nativeDragProps(idx) : {})}
@@ -4142,7 +4188,14 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, myBook
                 gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
                 gap: isMobile ? 9 : 16,
               }}>
-                {read.map(renderTile)}
+                {readSort === 'date_read'
+                  ? groupByReadYear(read).map(([year, items]) => (
+                      <Fragment key={year}>
+                        <YearHeader year={year} />
+                        {items.map(renderTile)}
+                      </Fragment>
+                    ))
+                  : read.map(renderTile)}
               </div>
             )
           }
@@ -4454,6 +4507,72 @@ function FriendsPage({ userId }) {
     return new Date(b.updated_at) - new Date(a.updated_at)
   })
 
+  // Renders one tile in the aggregated friends' shelf grid, with hover/tap
+  // quick-add icons for books not already on your own shelf.
+  function renderShelfTile(ub) {
+    const book = ub.books || {}
+    const inLibrary = isInMyLibrary(book, myBookIds, myBookKeys, myBooks)
+    const isHovered = hoveredShelfId === ub.id
+
+    // Mobile has no hover — tap reveals the action icons for a couple
+    // seconds, then they auto-hide (matches WatchList). Tapping again
+    // while revealed opens the modal.
+    function handleTap() {
+      if (isMobile && !inLibrary && !isHovered) {
+        setHoveredShelfId(ub.id)
+        clearTimeout(shelfHideTimerRef.current)
+        shelfHideTimerRef.current = setTimeout(() => setHoveredShelfId(null), 2500)
+        return
+      }
+      setModal({ book: ub.books, userBook: ub })
+    }
+
+    return (
+      <div key={ub.id}
+        onMouseEnter={() => setHoveredShelfId(ub.id)}
+        onMouseLeave={() => setHoveredShelfId(null)}
+        style={{ position: 'relative' }}
+      >
+        <PosterCard userBook={ub} onClick={handleTap} />
+
+        {/* Hover icons — only shown if not already on your shelf, so
+            there's nothing blocking the click-to-open-modal otherwise. */}
+        {isHovered && !inLibrary && (
+          <div onClick={() => setModal({ book: ub.books, userBook: ub })} style={{
+            position: 'absolute', inset: 0, borderRadius: 8,
+            background: 'rgba(10,8,24,0.72)',
+            display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'flex-end',
+            paddingBottom: 14,
+          }}>
+            <div style={{ display: 'flex', gap: 8 }} onClick={e => e.stopPropagation()}>
+              {[
+                ['reading',      STATUS_ICONS.reading],
+                ['want_to_read', STATUS_ICONS.want_to_read],
+                ['read',         STATUS_ICONS.read],
+              ].map(([st, icon]) => (
+                <button key={st} title={STATUS_LABELS[st]} disabled={!!shelfAdding}
+                  onClick={() => quickAddToShelf(book, st)}
+                  style={{
+                    width: 30, height: 30, borderRadius: '50%', border: 'none',
+                    background: STATUS_COLORS[st].color, color: '#0f1117',
+                    cursor: shelfAdding ? 'not-allowed' : 'pointer', fontSize: 13,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
+                    opacity: shelfAdding && shelfAdding !== book.id + st ? 0.5 : 1,
+                    transition: 'transform 0.1s, opacity 0.1s',
+                    transform: shelfAdding === book.id + st ? 'scale(0.9)' : 'scale(1)',
+                  }}>
+                  {shelfAdding === book.id + st ? '…' : icon}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   // If viewing a friend's full list, render that component
   if (friendView) {
     return (
@@ -4734,69 +4853,14 @@ function FriendsPage({ userId }) {
             gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
             gap: isMobile ? 9 : 16,
           }}>
-            {shelfVisible.map(ub => {
-              const book = ub.books || {}
-              const inLibrary = isInMyLibrary(book, myBookIds, myBookKeys, myBooks)
-              const isHovered = hoveredShelfId === ub.id
-
-              // Mobile has no hover — tap reveals the action icons for a couple
-              // seconds, then they auto-hide (matches WatchList). Tapping again
-              // while revealed opens the modal.
-              function handleTap() {
-                if (isMobile && !inLibrary && !isHovered) {
-                  setHoveredShelfId(ub.id)
-                  clearTimeout(shelfHideTimerRef.current)
-                  shelfHideTimerRef.current = setTimeout(() => setHoveredShelfId(null), 2500)
-                  return
-                }
-                setModal({ book: ub.books, userBook: ub })
-              }
-
-              return (
-                <div key={ub.id}
-                  onMouseEnter={() => setHoveredShelfId(ub.id)}
-                  onMouseLeave={() => setHoveredShelfId(null)}
-                  style={{ position: 'relative' }}
-                >
-                  <PosterCard userBook={ub} onClick={handleTap} />
-
-                  {/* Hover icons — only shown if not already on your shelf, so
-                      there's nothing blocking the click-to-open-modal otherwise. */}
-                  {isHovered && !inLibrary && (
-                    <div onClick={() => setModal({ book: ub.books, userBook: ub })} style={{
-                      position: 'absolute', inset: 0, borderRadius: 8,
-                      background: 'rgba(10,8,24,0.72)',
-                      display: 'flex', flexDirection: 'column',
-                      alignItems: 'center', justifyContent: 'flex-end',
-                      paddingBottom: 14,
-                    }}>
-                      <div style={{ display: 'flex', gap: 8 }} onClick={e => e.stopPropagation()}>
-                        {[
-                          ['reading',      STATUS_ICONS.reading],
-                          ['want_to_read', STATUS_ICONS.want_to_read],
-                          ['read',         STATUS_ICONS.read],
-                        ].map(([st, icon]) => (
-                          <button key={st} title={STATUS_LABELS[st]} disabled={!!shelfAdding}
-                            onClick={() => quickAddToShelf(book, st)}
-                            style={{
-                              width: 30, height: 30, borderRadius: '50%', border: 'none',
-                              background: STATUS_COLORS[st].color, color: '#0f1117',
-                              cursor: shelfAdding ? 'not-allowed' : 'pointer', fontSize: 13,
-                              display: 'flex', alignItems: 'center', justifyContent: 'center',
-                              boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
-                              opacity: shelfAdding && shelfAdding !== book.id + st ? 0.5 : 1,
-                              transition: 'transform 0.1s, opacity 0.1s',
-                              transform: shelfAdding === book.id + st ? 'scale(0.9)' : 'scale(1)',
-                            }}>
-                            {shelfAdding === book.id + st ? '…' : icon}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
+            {statusFilter === 'date_read'
+              ? groupByReadYear(shelfVisible).map(([year, items]) => (
+                  <Fragment key={year}>
+                    <YearHeader year={year} />
+                    {items.map(renderShelfTile)}
+                  </Fragment>
+                ))
+              : shelfVisible.map(renderShelfTile)}
           </div>
         )
       }
@@ -5991,7 +6055,16 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
             gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 106 : 120}px, 1fr))`,
             gap: isMobile ? 9 : 16, marginBottom: 22,
           }}>
-            {visibleBooks.map(ub => (
+            {bookSort === 'date_read'
+              ? groupByReadYear(visibleBooks).map(([year, items]) => (
+                  <Fragment key={year}>
+                    <YearHeader year={year} />
+                    {items.map(ub => (
+                      <PosterCard key={ub.id} userBook={ub} onClick={() => setModal(ub)} />
+                    ))}
+                  </Fragment>
+                ))
+              : visibleBooks.map(ub => (
               <PosterCard key={ub.id} userBook={ub} onClick={() => setModal(ub)} />
             ))}
           </div>
