@@ -303,12 +303,31 @@ async function nextWantToReadPosition(userId) {
   return (data?.position ?? -1) + 1
 }
 
+// Local YYYY-MM-DD (not UTC) — a Postgres DATE column, so no time/timezone
+// component is needed and this avoids the previous day showing up after 5pm
+// in timezones behind UTC that toISOString() would cause.
+function todayDate() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+// Formats a 'YYYY-MM-DD' string as e.g. "Jan 15, 2026" without UTC shift issues
+function formatDate(dateStr) {
+  if (!dateStr) return ''
+  const [y, m, d] = dateStr.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
 async function addToLibrary(userId, book, status) {
   await upsertBook(book)
   const position = status === 'want_to_read' ? await nextWantToReadPosition(userId) : 0
-  const { data, error } = await supabase.from('user_books').upsert({
-    user_id: userId, book_id: book.id, status, position,
-  }, { onConflict: 'user_id,book_id' }).select().single()
+  const payload = { user_id: userId, book_id: book.id, status, position }
+  // Marking something read directly (e.g. a quick-add icon) should date it
+  // today, same as moving an existing shelf entry into Read does.
+  if (status === 'read') payload.finished_at = todayDate()
+  const { data, error } = await supabase.from('user_books').upsert(payload, {
+    onConflict: 'user_id,book_id',
+  }).select().single()
   if (error) throw error
   return data
 }
@@ -1353,6 +1372,8 @@ function BookDetailModal({ item, userId, onClose, onUpdate, listItem }) {
   const [rating,       setRating]       = useState(userBook?.rating || null)
   const [notes,        setNotes]        = useState(userBook?.notes || '')
   const [top10,        setTop10]        = useState(userBook?.top_10 || false)
+  const [finishedAt,   setFinishedAt]   = useState(userBook?.finished_at || '')
+  const [showDatePanel, setShowDatePanel] = useState(false)
   const [userBookId,   setUserBookId]   = useState(userBook?.id || null)
   const [saved,        setSaved]        = useState(false)   // flash checkmark
   const [showRating,   setShowRating]   = useState(false)
@@ -1554,12 +1575,17 @@ function BookDetailModal({ item, userId, onClose, onUpdate, listItem }) {
   async function handleStatusChange(newStatus) {
     const prevStatus = status
     setStatus(newStatus)
+    // Stamp today's date the moment a book moves into Read, so "date read"
+    // reflects when that actually happened rather than being left blank.
+    const newFinishedAt = newStatus === 'read' ? todayDate() : finishedAt
+    if (newStatus === 'read') setFinishedAt(newFinishedAt)
     try {
       if (userBookId) {
         // Moving (back) into Want to Read should append to the end of the
         // queue, not leave whatever stale/zero position it had before.
         const patch = { status: newStatus }
         if (newStatus === 'want_to_read') patch.position = await nextWantToReadPosition(userId)
+        if (newStatus === 'read') patch.finished_at = newFinishedAt
         const { error } = await supabase.from('user_books').update(patch).eq('id', userBookId)
         if (error) throw error
       } else {
@@ -1574,6 +1600,21 @@ function BookDetailModal({ item, userId, onClose, onUpdate, listItem }) {
       }
     } catch (err) {
       setStatus(prevStatus)
+      flashError(err)
+    }
+  }
+
+  async function handleFinishedAtChange(dateStr) {
+    const prev = finishedAt
+    setFinishedAt(dateStr)
+    try {
+      const id = await ensureEntry('read')
+      const { error } = await supabase.from('user_books').update({ finished_at: dateStr || null }).eq('id', id)
+      if (error) throw error
+      onUpdate?.()
+      flashSaved()
+    } catch (err) {
+      setFinishedAt(prev)
       flashError(err)
     }
   }
@@ -1961,6 +2002,14 @@ function BookDetailModal({ item, userId, onClose, onUpdate, listItem }) {
               : <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: '0.03em', color: C.muted }}>NOT RATED</span>
             }
             active={showRatePanel} onClick={() => setShowRatePanel(o => !o)} />
+          {!inList && status === 'read' && (
+            <ActionBox icon="📅" label="Date"
+              sub={finishedAt
+                ? <span style={{ fontSize: 9, fontWeight: 700, color: C.muted }}>{formatDate(finishedAt)}</span>
+                : <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: '0.03em', color: C.muted }}>NOT SET</span>
+              }
+              active={showDatePanel} onClick={() => setShowDatePanel(o => !o)} />
+          )}
           <ActionBox icon="📝" label="Notes"
             active={showNotesPanel} onClick={() => setShowNotesPanel(o => !o)} />
           <ActionBox icon="↗" label="Share"
@@ -1983,6 +2032,16 @@ function BookDetailModal({ item, userId, onClose, onUpdate, listItem }) {
               {saved && <span style={{ fontSize: 11, color: C.success, fontFamily: f.sans }}>✓ Saved</span>}
             </div>
             <StarRating value={rating} onChange={handleRatingChange} size={24} />
+          </div>
+        )}
+
+        {showDatePanel && (
+          <div style={{ marginBottom: 16, padding: '12px 14px', background: C.surface2, borderRadius: 10 }}>
+            <p style={{ margin: '0 0 8px', fontSize: 11, color: C.muted, fontFamily: f.sans,
+              textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>Date Finished</p>
+            <input type="date" value={finishedAt || ''} max={todayDate()}
+              onChange={e => handleFinishedAtChange(e.target.value)}
+              style={{ ...inputStyle, maxWidth: 200 }} />
           </div>
         )}
 
@@ -2725,7 +2784,16 @@ const READ_SORTS = [
   ['default',   'Default'],
   ['top_rated', 'Top Rated'],
   ['recent',    'Recent'],
+  ['date_read', 'Date Read'],
 ]
+
+// Sorts by finished_at descending (nulls last, since not every read book has a date)
+function byDateReadDesc(a, b) {
+  if (!a.finished_at && !b.finished_at) return 0
+  if (!a.finished_at) return 1
+  if (!b.finished_at) return -1
+  return a.finished_at < b.finished_at ? 1 : a.finished_at > b.finished_at ? -1 : 0
+}
 
 function HomePage({ userId, onOpenList }) {
   const isMobile = useIsMobile()
@@ -2760,6 +2828,7 @@ function HomePage({ userId, onOpenList }) {
     if (readFavOnly) list = list.filter(u => u.top_10)
     if (readSort === 'recent') return list // already fetched in updated_at desc order
     if (readSort === 'top_rated') return [...list].sort((a, b) => (b.rating || 0) - (a.rating || 0))
+    if (readSort === 'date_read') return [...list].sort(byDateReadDesc)
     // 'default' — favorites first, then by rating descending, then most
     // recent first as the tiebreaker within a rating (e.g. all the 5-star ones).
     return [...list].sort((a, b) => {
@@ -3591,6 +3660,8 @@ function MyListPage({ userId, initialFilter = 'all', lockedFilter = null, onBack
     ? genreFiltered
     : filter === 'read' && readSort === 'top_rated'
     ? [...genreFiltered].sort((a, b) => (b.rating || 0) - (a.rating || 0))
+    : filter === 'read' && readSort === 'date_read'
+    ? [...genreFiltered].sort(byDateReadDesc)
     : sortDefault(genreFiltered)
 
   // Drag for want_to_read queue — native drag on desktop, grip handle on touch
@@ -3791,6 +3862,7 @@ function FriendListView({ friendProfile, userId, myBookIds, setMyBookIds, myBook
     if (readFavOnly) list = list.filter(u => u.top_10)
     if (readSort === 'recent') return list
     if (readSort === 'top_rated') return [...list].sort((a, b) => (b.rating || 0) - (a.rating || 0))
+    if (readSort === 'date_read') return [...list].sort(byDateReadDesc)
     return [...list].sort((a, b) => {
       if (!!b.top_10 !== !!a.top_10) return b.top_10 ? 1 : -1
       const aRating = a.rating || 0, bRating = b.rating || 0
@@ -5672,6 +5744,7 @@ function ProfilePage({ userId, email, profile, onProfileUpdate, onSignOut, theme
       : allBooks.filter(u => u.status === bookStatus)
     if (bookSort === 'top_rated') return [...list].sort((a, b) => (b.rating || 0) - (a.rating || 0))
     if (bookSort === 'recent') return list // already fetched updated_at desc
+    if (bookSort === 'date_read') return [...list].sort(byDateReadDesc)
     return [...list].sort((a, b) => {
       if (!!b.top_10 !== !!a.top_10) return b.top_10 ? 1 : -1
       const aRating = a.rating || 0, bRating = b.rating || 0
@@ -6002,17 +6075,26 @@ function stripHyperlink(val) {
 
 const GR_SHELF = { 'read': 'read', 'currently-reading': 'reading', 'to-read': 'want_to_read' }
 
+// Goodreads exports "Date Read" as "yyyy/MM/dd" — convert to "yyyy-MM-dd", or null if blank/invalid
+function parseGoodreadsDate(val) {
+  const m = (val || '').trim().match(/^(\d{4})\/(\d{2})\/(\d{2})$/)
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null
+}
+
 function mapImportRow(row, fmt, defaultStatus = 'read') {
   if (fmt === 'goodreads') {
     const isbn = (row['ISBN13'] || row['ISBN'] || '').replace(/[="]/g, '')
     const rating = parseInt(row['My Rating']) || null
+    const status = GR_SHELF[row['Exclusive Shelf']] || 'want_to_read'
+    const finishedAt = status === 'read' ? parseGoodreadsDate(row['Date Read']) : null
     return {
       title:  row['Title'] || '',
       author: row['Author'] || row['Author l-f'] || '',
       isbn:   isbn || null,
-      status: GR_SHELF[row['Exclusive Shelf']] || 'want_to_read',
+      status,
       rating: (rating && rating > 0) ? rating : null,
       notes:  row['My Review'] || '',
+      finishedAt,
     }
   }
   if (fmt === 'audible') {
@@ -6246,6 +6328,9 @@ function ImportModal({ userId, existingBookIds, onClose, onDone }) {
           status:  item.status, rating: item.rating || null,
           notes:   item.notes  || null,
           position: item.status === 'want_to_read' ? wantToReadBase + i : 0,
+          // Only stamp a read date when the source actually had one (e.g. Goodreads'
+          // "Date Read" column) — don't fabricate "today" for a past import.
+          finished_at: item.status === 'read' ? (item.finishedAt || null) : null,
         }, { onConflict: 'user_id,book_id' })
         if (error) { failed++; return }
         imported++
